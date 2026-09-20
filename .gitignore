@@ -5,6 +5,8 @@ reports/
 final_summary.csv
 lab.db
 __pycache__/
-*.py[cod]
 skills-lock.json
 .agents/
+.env
+.venv/
+cache/
