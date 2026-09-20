@@ -11,18 +11,13 @@ import os
 
 
 HUB_API     = "https://hub.docker.com/v2"
-HUB_LIBRARY = HUB_API + "/repositories/library/"                 # Krok 1
-HUB_SEARCH  = HUB_API + "/search/repositories/"                  # Krok 1
+HUB_LIBRARY = HUB_API + "/repositories/library/"
+HUB_SEARCH  = HUB_API + "/search/repositories/" 
 PAGE_SIZE  = 100
 MAX_PAGE=200
 TIMEOUT    = (10, 30)
 USER_AGENT = "pwr-thesis-fetcher/0.1"
-MANIFEST_ACCEPT = ("application/vnd.oci.image.index.v1+json,"
-                   "application/vnd.docker.distribution.manifest.list.v2+json")
-SEARCH_QUERIES = [
-    "alpine", "slim", "python", "node",
-    "java", "nginx", "postgres", "redis",
-]
+SEARCH_QUERIES = [ "python", "java", "nodejs"]
 load_dotenv()
 token = os.environ["DOCKER_HUB_PAT"]
 log = logging.getLogger("hub_catalog")
@@ -54,6 +49,16 @@ def build_session(cache_name: str = "cache/hub_api") -> requests.Session:
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
+
+def build_repo_catalog(session: requests.Session, queries: list[str], out_path: Path, search_pages: int) -> int:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    with out_path.open("w", encoding="utf-8") as handle:
+        def emit(repo: Repo) -> None:
+            if repo.key in seen:
+                return
+            seen.add(repo.key)
+            handle.write(json.dumps(repo.to_record(), ensure_ascii=False) + "\n")
 
 def main():
     session = build_session()
