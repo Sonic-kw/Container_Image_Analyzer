@@ -6,6 +6,9 @@ czatu. Źródłem są pliki planów `~/.cursor/plans/fetcher_matrycy_92879bdc.pl
 (wersja obowiązująca) oraz `~/.cursor/plans/inteligentny_fetcher_2bcd6835.plan.md`
 (wcześniejsza, zastąpiona).
 
+**Lokalizacja projektu (Linux):** `~/Projects/Container_Image_Anylyzer`
+(wcześniej Windows: `C:\Projects\Container_Image_Anylyzer`).
+
 Rozdział [Rejestry i ścieżki pobierania](#rejestry-i-ścieżki-pobierania) oraz
 [Warianty distroless](#warianty-distroless--dowody-pomiarowe) zawierają **korekty ustaleń
 z 13.09.2026**, zweryfikowane empirycznie. Poprawiają one dwa błędy poprzednich planów.
