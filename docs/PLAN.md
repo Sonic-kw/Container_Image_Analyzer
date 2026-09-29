@@ -435,6 +435,16 @@ różni się wyłącznie metadanymi.
 z rootfs), nie digest manifestu. Digest manifestu zostaje jako identyfikator artefaktu do
 cytowania w pracy (pinowanie zgodne z SLSA), ale nie jako klucz niezależności obserwacji.
 
+**Digest indeksu to nie digest obrazu amd64** (pomiar 29.09.2026). `python:3.13`
+i `python:3.13-trixie` mają **różne digesty indeksu**, bo pierwszy indeks zawiera dodatkowo
+obrazy Windows, ale wskazują **ten sam manifest amd64**. `python:3.13-slim` i
+`python:3.13-slim-trixie` są z kolei zwykłymi aliasami z identycznym digestem. Dlatego fetcher
+zapisuje obok `digest` (indeks) także `arch_digest` (manifest amd64) i to on jest pierwszym,
+tanim stopniem deduplikacji — na próbie `library/` + wyszukiwanie 271 884 wierszy daje tylko
+146 894 unikalnych obrazów amd64. `layer_key` pozostaje drugim stopniem, dla obrazów o różnych
+manifestach i identycznych warstwach. `pull_ref` jest pinowany właśnie `arch_digest`, więc
+skanowany jest dokładnie ten obraz, który został zdeduplikowany.
+
 ## Taksonomia utwardzania
 
 Wersja obowiązująca używa **czterech klas** z flagami jako osobnymi wymiarami:
@@ -452,6 +462,36 @@ jest celowe: dzięki temu delty z punktu 7 nie są zanieczyszczone zmianą użyt
 Aliasy `debug`, `debug-nonroot` i `nonroot` są **odfiltrowywane na etapie pobierania** i nie mają
 reprezentacji w taksonomii (Konsekwencje 1 i 2). Dostępność wariantu `nonroot` jest zapisywana
 jako `nonroot_available` i omawiana jakościowo, bez skanu.
+
+### Reguły klasyfikacji tagów (Krok 4, `src/Classify.py`)
+
+Klasa i linia systemu są wyprowadzane **z samej nazwy tagu**, tokenami po `-`. Reguły są
+deterministyczne i zapisane w kodzie, żeby dało się je przytoczyć w rozdziale 2:
+
+- **Wykluczenia** (`excluded_reason`, wiersz zostaje w pliku, ale nie trafia do matrycy):
+  `windows` (tokeny `windowsservercore`, `nanoserver`, `ltsc…`), `onbuild` (obraz-szablon,
+  nie baza) oraz `no_amd64` (indeks bez obrazu linux/amd64 — skanujemy jedną architekturę).
+- **`alpine` wygrywa ze `slim`** — tag `…-slim-alpine` to alpine.
+- W repozytoriach bazowych (`library/alpine`, `library/debian`, `library/ubuntu`) linia systemu
+  pochodzi z wersji repozytorium (`alpine:3.22` → `alpine3.22`), a `library/alpine` jest
+  zawsze klasy `alpine`.
+- Nazwy suit Debiana (`sid`, `testing`, `stable`, `oldstable`…) są interpretowane **tylko
+  w `library/debian`** — w innych repozytoriach `unstable` oznacza kanał wydań aplikacji
+  (np. `mongo`), nie Debiana.
+- Rozpoznawane linie: kodowe nazwy Debiana (`squeeze`…`forky` → `debianN`), Ubuntu, `alpineX.Y`
+  oraz bazy firmowe (`oraclelinux`, `ubi`, `centos`, `amazonlinux`, `rockylinux`, `almalinux`).
+- **`prerelease`** to flaga, nie klasa: `rc`, `alpha`, `beta`, `preview`, `dev`, `nightly`,
+  `edge` i wersje z sufiksem tego typu. Decyzja, czy wydania przedpremierowe wchodzą do próby,
+  należy do Kroku 5.
+- **Linia systemu z aliasu.** Tag bez sufiksu systemu (`python:3.13`, `latest`) dziedziczy linię
+  od tagu o tym samym `arch_digest` (`3.13-trixie` → `debian13`), ale tylko gdy wszystkie aliasy
+  wskazują jedną linię. Przy sprzeczności (np. obrazy `docker` z dwiema liniami alpine, `gradle`
+  z dwiema liniami Ubuntu) pole zostaje puste zamiast zgadywać. Pochodzenie zapisuje
+  `os_line_source`.
+
+`family` to dla Huba nazwa repozytorium, a dla distroless nazwa mapowana na technologię
+partnera: `python3-*` → `python`, `nodejs*` → `node`, `java*` → `java`, a `static`, `base`
+i `cc` → `base`. `vendor` to przestrzeń nazw (`library`, `bitnami`, `distroless`…).
 
 ## Punkt 7: standard jako baseline
 
@@ -580,8 +620,8 @@ flowchart LR
   gcr["GCR distroless katalog"] --> classify
   classify --> matrix["logical_ref plus pull_ref"]
   matrix --> probe["Sonda dostepnosci lustra"]
-  probe -->|ok| mirror["Pull przez mirror.gcr.io"]
-  probe -->|404| hubPull["Pull z Huba, budzet 200 na 6h"]
+  probe -->|"hit / cold_miss"| mirror["Pull przez mirror.gcr.io"]
+  probe -->|"404 po ponowieniu"| hubPull["Pull z Huba, budzet 200 na 6h"]
   matrix --> gcrPull["Pull z gcr.io distroless"]
   mirror --> trivy["Trivy wsady"]
   hubPull --> trivy
@@ -909,6 +949,25 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
 - [ ] **Krok 5 — matryca 10 tys.** Merge Hub + GCR, dedup po `layer_key`, kwoty miękkie,
   wyliczenie `paired` względem wariantu `standard` tej samej technologii.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
+  Wejście z pełnego przebiegu Kroków 3–4 (29.09.2026) — decyzje do podjęcia tutaj:
+  - **Normalizacja `family`.** Nazwa repozytorium nie jest technologią: wyszukiwanie daje
+    `nodejs` obok `library/node`, `aws-lambda-python`, `zabbix-java-gateway`. Potrzebne jawne
+    mapowanie (lub odrzucenie) nazw spoza technologii bazowych, inaczej `paired` się nie domknie.
+  - **Duplikaty `library/`.** 3 087 wierszy z wyszukiwania ma ten sam `arch_digest` co obraz
+    oficjalny (np. przestrzeń `amd64/*` to przepakowane `library/`). Dedup po `arch_digest`
+    musi preferować wiersz `library/`.
+  - **Dominujące repozytoria.** `flywheel/python` ma 21 424 tagi, `amazon/*` 12 151,
+    `ccitest/*` 11 056 — limit per repozytorium jest konieczny, nie opcjonalny.
+  - **Brak linii systemu.** 40% wierszy `library/` i 82% z wyszukiwania nie ma `os_line`.
+    Dla parowania z distroless linia jest wymagana (patrz pilotaż: `debian12` vs `debian13`),
+    więc takie wiersze mogą wejść do matrycy, ale nie do par z distroless — albo trzeba ją
+    uzupełnić z samego skanu (Trivy podaje OS), co przesuwa parowanie za Krok 6.
+  - **`no_amd64`** (40 945) to głównie przestrzenie per architektura (`arm64v8`, `i386`,
+    `arm32v7`, `ppc64le`) oraz `chainguard` (7 115) — ten ostatni warto sprawdzić osobno,
+    bo to kandydat na korpus „distroless-like”.
+  - **`prerelease`** — włączyć czy wykluczyć; jedna reguła, zapisana.
+  Po złożeniu matrycy obowiązkowo `Classify.py probe-tags`, a udział ścieżki Hub raportowany
+  jako liczba partii po 200 / 6 h.
 - [ ] **Krok 6 — skaner.** Trivy na `pull_ref` z `--image-src remote`, **baza CVE zamrożona
   przed startem kampanii** (`--download-db-only`, potem `--skip-db-update`), partie poniżej
   limitu, resume gdy JSON raportu istnieje. Szczegóły i uzasadnienie:
@@ -965,8 +1024,10 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 ## Stan repozytorium
 
 Repozytorium zawiera `Dockerfile`, `requirements.txt`, `scanner.py` (PoC), ten dokument
-oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2)
-i `GetTags.py` (Krok 3). PoC nie jest podstawą dalszej pracy — jego dług techniczny jest spisany
+oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
+`GetTags.py` (Krok 3) i `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`). Wyniki
+(`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
+digestów. PoC nie jest podstawą dalszej pracy — jego dług techniczny jest spisany
 w [osobnym rozdziale](#dług-techniczny-w-istniejącym-kodzie), a implementacja idzie od nowa
 według Kroków 1–6.
 
