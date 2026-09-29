@@ -229,8 +229,9 @@ mirror.gcr.io/library/python:3.10.21-alpine3.24 -> 200
 ```
 
 **Ale są dziury, i jedna trafia prosto w plan.** `openjdk` — wskazany w poprzednim planie jako
-jedno z dwóch dominujących repozytoriów (17 042 tagi) — jest **nieobecny na lustrze na poziomie
-repozytorium**, nie pojedynczego tagu:
+jedno z dwóch dominujących repozytoriów (17 042 tagi) — nie ma na lustrze żadnego z typowych
+tagów (pomiar 29.09.2026 wykazał, że obecne są pojedyncze tagi EA, więc nie jest to dziura
+całego repozytorium, tylko jego głównych manifestów):
 
 ```
 mirror.gcr.io/library/openjdk:latest   -> 404
@@ -241,21 +242,30 @@ mirror.gcr.io/library/openjdk:24-jdk   -> 404
 ```
 
 **Konsekwencja projektowa:** fetcher nie może stosować bezwarunkowej reguły przepisywania
-`library/{name}` → `mirror.gcr.io/library/{name}`. Musi **sondować dostępność per repozytorium**
-(`HEAD`/`GET` na manifest) i zapisywać wynik w matrycy, z jawnym fallbackiem na Hub. Obrazy
-spadające na Hub obciążają licznik 200/6 h, więc muszą być budżetowane osobno.
+`library/{name}` → `mirror.gcr.io/library/{name}`. Musi **sondować dostępność** (`HEAD` na
+manifest) i zapisywać wynik w matrycy, z jawnym fallbackiem na Hub. Obrazy spadające na Hub
+obciążają licznik 200/6 h, więc muszą być budżetowane osobno.
 
-**Dziury są też na poziomie pojedynczego tagu** (pomiar 29.09.2026). Repozytorium `python` jest
-na lustrze, a mimo to bardzo stary tag z niego wypadł:
+**Dostępność jest cechą manifestu, nie repozytorium** (pomiar 29.09.2026). Repozytorium
+`python` jest na lustrze, a mimo to bardzo stary tag z niego wypadł:
 
 ```
 mirror.gcr.io/library/python:3.13.0a1-slim  -> 200   (2023)
 mirror.gcr.io/library/python:2.7.9-wheezy   -> 404   (2015)
 ```
 
-Sonda per repozytorium jest więc konieczna, ale niewystarczająca. Krok 4 sonduje repozytoria
-na całym katalogu, a sonda per tag uruchamiana jest dopiero na wybranej matrycy (po Kroku 5),
-żeby nie odpytywać setek tysięcy tagów, które i tak odpadną.
+Do tego lustro to pull-through cache: **pierwsze 404 bywa chybieniem na zimno** — lustro
+pobiera wtedy manifest z Huba i kolejne zapytanie zwraca 200 (zaobserwowane m.in. dla świeżych
+tagów `jenkins`, `semeru`, `unit`, `spark`). Część braków jest natomiast trwała
+(`openjdk:17`, `python:2.7.9-wheezy`, `java:8`, stare tagi `mysql`, `redis`, `wordpress`).
+Sonda per repozytorium (jeden reprezentatywny tag) myliła się więc w obie strony i została
+odrzucona.
+
+Stąd sonda **per wiersz matrycy**: `HEAD mirror.gcr.io/v2/<repo>/manifests/<digest amd64>`,
+chybienia ponawiane po odczekaniu (`--retry-delay`), wynik zapisywany jako `mirror_probe` =
+`hit` / `cold_miss` / `miss`; tylko `miss` kieruje obraz na Hub. Uruchamiana jest dopiero na
+wybranej matrycy (po Kroku 5), żeby nie odpytywać setek tysięcy tagów, które i tak odpadną,
+i bez cache HTTP, który utrwaliłby pierwsze 404.
 
 Dodatkowo dokumentacja Google zaznacza, że obraz usunięty z Huba może pozostać w cache
 **do kilku dni**. To kwestia trafności: teoretycznie można przeskanować obraz, którego już nie
@@ -557,6 +567,7 @@ wersje.
 | `pull_ref` | skąd Trivy ściąga warstwy |
 | `registry` | `hub` / `gcr` / `mirror` |
 | `mirror_ok` | czy lustro miało ten obraz (sondowane, nie zakładane) |
+| `mirror_probe` | `hit` / `cold_miss` / `miss` — wynik sondy z ponowieniem |
 | `nonroot_available` | czy repozytorium oferuje wariant `nonroot` (własność, nie osobny wiersz) |
 | `layer_key` | klucz deduplikacji dla analizy CVE |
 | `paired` | czy `family` ma wariant `standard` + ≥1 klasę utwardzoną (warunek analizy z pkt 7) |
@@ -836,7 +847,7 @@ dopiero tutaj pojawia się potrzeba cache, backoffu i tokenu.
 **Krok 4 — klasyfikacja i ścieżka pobierania.** Dwie rzeczy naraz. Przypisanie klasy utwardzenia
 z nazwy tagu — to ta jedna kolumna, wokół której kręci się cała analiza z punktów 5–7. Oraz
 ustalenie, skąd obraz ściągnąć: przez lustro (nie liczy się do limitu 200/6 h) czy z Huba,
-sprawdzane **per repozytorium**, bo lustro ma dziury.
+sprawdzane **per manifest**, bo lustro ma dziury i chybienia na zimno.
 
 **Krok 5 — złożenie matrycy.** Sklejenie obu katalogów i doprowadzenie do stanu zdatnego do
 analizy: deduplikacja (trzy tagi potrafią wskazywać ten sam obraz i udawać trzy niezależne
@@ -878,10 +889,17 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   Zamknięty: `src/GetTags.py` → `results/tags.jsonl`, cache per repozytorium w
   `cache/hub_tags/` (wznowienie bez ponownych zapytań). Pilot `python`: 3923/3923 tagów
   w 40 stronach, czyli pełna lista powyżej progu anonimowego.
-- [ ] **Krok 4 — klasyfikacja + `pull_ref` + sonda lustra.** Dla każdego repo sprawdzić
+- [x] **Krok 4 — klasyfikacja + `pull_ref` + sonda lustra.** Dla każdego obrazu sprawdzić
   dostępność na `mirror.gcr.io` i zapisać `mirror_ok`; fallback na Hub z osobnym budżetem.
   **Nie** stosować bezwarunkowego przepisywania URL (patrz przypadek `openjdk`).
   `feat(fetcher): mapowanie pull_ref z sonda dostepnosci lustra`
+  Zamknięty: `src/Classify.py`. `classify` → `results/classified.jsonl` (wariant, linia OS,
+  wersja, `prerelease`, `excluded_reason` = `windows` / `onbuild` / `no_amd64`; linia OS
+  aliasów rozwiązywana po wspólnym digeście amd64). `assign` → `results/refs.jsonl`
+  (`pull_ref` pinowany digestem amd64; distroless z indeksu OCI w `gcr.io`). `probe-tags`
+  weryfikuje lustro per wiersz i **musi zostać uruchomiony na matrycy po Kroku 5**.
+  Wynik dla `library/` + GCR: 132 563 standard, 15 639 slim, 39 677 alpine, 56 distroless.
+  Do powtórzenia `classify` po pobraniu tagów repozytoriów z wyszukiwania.
 - [ ] **Krok 5 — matryca 10 tys.** Merge Hub + GCR, dedup po `layer_key`, kwoty miękkie,
   wyliczenie `paired` względem wariantu `standard` tej samej technologii.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
