@@ -182,7 +182,7 @@ już nie), i jest **różny dla różnych endpointów**. Zmierzone progi:
 | --- | --- | --- |
 | `/v2/repositories/library/` | 90 | 100 |
 | `/v2/search/repositories/` | 100 | 200 |
-| `/v2/repositories/{ns}/{name}/tags/` | 900 | 3900 |
+| `/v2/repositories/{ns}/{name}/tags/` | 900 | 1000 (29.09.2026; wcześniej sprawdzono tylko 3900) |
 
 Sprawdzone: zjawisko **nie zależy** od `User-Agent` ani od biblioteki klienckiej (identyczne
 wyniki dla `requests` i `urllib`, dla nagłówka własnego i przeglądarkowego), więc nie jest to
@@ -245,9 +245,27 @@ mirror.gcr.io/library/openjdk:24-jdk   -> 404
 (`HEAD`/`GET` na manifest) i zapisywać wynik w matrycy, z jawnym fallbackiem na Hub. Obrazy
 spadające na Hub obciążają licznik 200/6 h, więc muszą być budżetowane osobno.
 
+**Dziury są też na poziomie pojedynczego tagu** (pomiar 29.09.2026). Repozytorium `python` jest
+na lustrze, a mimo to bardzo stary tag z niego wypadł:
+
+```
+mirror.gcr.io/library/python:3.13.0a1-slim  -> 200   (2023)
+mirror.gcr.io/library/python:2.7.9-wheezy   -> 404   (2015)
+```
+
+Sonda per repozytorium jest więc konieczna, ale niewystarczająca. Krok 4 sonduje repozytoria
+na całym katalogu, a sonda per tag uruchamiana jest dopiero na wybranej matrycy (po Kroku 5),
+żeby nie odpytywać setek tysięcy tagów, które i tak odpadną.
+
 Dodatkowo dokumentacja Google zaznacza, że obraz usunięty z Huba może pozostać w cache
 **do kilku dni**. To kwestia trafności: teoretycznie można przeskanować obraz, którego już nie
 ma w źródle. Do zapisania jako ograniczenie metodologiczne.
+
+**Zabezpieczenie: porównanie digestów.** Lustro zwraca nagłówek `Docker-Content-Digest`, który
+dla sprawdzonych tagów jest identyczny z `digest` z API Huba (np. `python:3.13-slim` →
+`sha256:7c61056e…` w obu). Sonda per tag porównuje oba digesty, a `pull_ref` jest pinowany
+digestem, nie tagiem — dzięki temu skanowany jest dokładnie artefakt opisany w matrycy,
+niezależnie od stanu cache lustra.
 
 ## Ustalenia zweryfikowane empirycznie
 
@@ -282,6 +300,22 @@ Fakty do zacytowania w rozdz. 2 (kryteria doboru próby):
   przetwarzamy go **przed** wyszukiwaniem i pomijamy klucze już widziane. Dzięki temu nie
   trzeba pisać logiki scalania rekordów. Weryfikacja przebiegu z 18.09.2026: 1764 unikalne
   repozytoria, zero duplikatów, `last_updated` obecne w dokładnie 181 rekordach.
+- **Liczba 1764 była artefaktem limitu anonimowego, nie kryterium doboru.** Przebieg z tokenem
+  (29.09.2026, 47 stron na zapytanie) daje **12 971** repozytoriów: 181 oficjalnych + 12 790
+  z wyszukiwania `python` / `java` / `nodejs`. Wyszukiwarka zwraca głównie szum — rozkład
+  `pull_count` dla wyników z wyszukiwania:
+
+  | Próg `pull_count` | Repozytoriów |
+  | --- | --- |
+  | ≥ 0 | 12 790 |
+  | ≥ 1 000 | 2 535 |
+  | ≥ 10 000 | 645 |
+  | ≥ 100 000 | 172 |
+  | ≥ 1 000 000 | 58 |
+
+  Próg popularności musi więc być jawnym, zapisanym kryterium doboru próby (rozdz. 2),
+  a nie skutkiem ubocznym limitu paginacji. Katalog z Kroku 1 zostaje pełny (to spis populacji),
+  próg stosuje Krok 3 (`GetTags.py --min-pulls`).
 - Populacja tagów to ~700 tys. (`openjdk` 17042, `node` 9036, `python` 3911). Deduplikacja
   redukuje ją o ~2/3 (100 tagów `python` = 33 unikalne obrazy).
 - Endpoint tagów zwraca `full_size`, `digest`, `tag_last_pushed` oraz tablicę `images[]`
@@ -817,21 +851,33 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
 - [x] **Krok 0 — obserwacja (bez kodu).** Zamknięty: library `count=181`; search alpine
   `count=103978` + `next`; tagi python (alpine/slim/standard + rozmiary); allowlist Distroless
   z README.
-- [ ] **Krok 1 — katalog Hub.** Kilka query, paginacja po `next`, dedup, `results/catalog.jsonl`.
+- [x] **Krok 1 — katalog Hub.** Kilka query, paginacja po `next`, dedup, `results/catalog.jsonl`.
   Pełną listę `library/` zdobywa się **dwoma przebiegami po `ordering`**, nie paginacją —
   anonimowy offset jest ograniczony. Wyszukiwanie daje anonimowo najwyżej 2 strony na zapytanie.
   `feat(fetcher): paginowany katalog Hub z kilku zapytan`
-- [ ] **Krok 2 — katalog GCR distroless.** Lista obrazów i dozwolonych tagów z README; API GCR
+  Zamknięty: `src/GetRepo.py hub`, z tokenem (JWT z PAT), więc zwykła paginacja wystarcza
+  i trik z `ordering` zostaje wyłącznie jako obejście anonimowe. Wynik 29.09.2026: 181
+  oficjalnych (`count=181`) + 12 790 z wyszukiwania = 12 971 repozytoriów.
+- [x] **Krok 2 — katalog GCR distroless.** Lista obrazów i dozwolonych tagów z README; API GCR
   tylko potwierdza istnienie. **Nie iterować całego `manifest`.** Filtr odrzuca: końcówki
   `.sig` / `.att`, prefix `update-available-`, tagi będące samym digestem / `sha256-...`,
   oraz **`debug`, `debug-nonroot` i `nonroot`** (Konsekwencje 1 i 2). **Zostaje wyłącznie
   `latest`** — jeden wiersz na repozytorium. Obecność wariantu `nonroot` zapisujemy jako
   `nonroot_available`, bez pobierania obrazu.
   `feat(fetcher): enumeracja GCR distroless, tylko tag latest`
-- [ ] **Krok 3 — tagi Hub + cache + backoff.** Token Hub tylko do API, **nie commitować**.
+  Zamknięty: `src/GetRepo.py gcr` → `results/gcr_catalog.jsonl`. Kandydaci to README (12 obrazów
+  `debian13`) plus dzieci `gcr.io/v2/distroless/tags/list` z jawnym sufiksem `-debianN`; aliasy
+  bez sufiksu (`python3`, `base`) są pomijane, bo wskazują te same warstwy co `-debian13`.
+  Istnienie `latest` i `nonroot` potwierdzane przez `HEAD` na manifest. Wynik 29.09.2026:
+  56 repozytoriów (linie `debian9`–`debian13`), 51 z `nonroot_available`. Wybór linii zgodnej
+  z bazą partnera z Huba należy do Kroku 5.
+- [x] **Krok 3 — tagi Hub + cache + backoff.** Token Hub tylko do API, **nie commitować**.
   Token jest tu **wymagany, nie opcjonalny**: anonimowy offset urywa się przed końcem listy
   tagów `python` (3923) i odcina większość tagów `openjdk` (17 042).
   `feat(fetcher): tagi Hub z cache i backoff przy 429`
+  Zamknięty: `src/GetTags.py` → `results/tags.jsonl`, cache per repozytorium w
+  `cache/hub_tags/` (wznowienie bez ponownych zapytań). Pilot `python`: 3923/3923 tagów
+  w 40 stronach, czyli pełna lista powyżej progu anonimowego.
 - [ ] **Krok 4 — klasyfikacja + `pull_ref` + sonda lustra.** Dla każdego repo sprawdzić
   dostępność na `mirror.gcr.io` i zapisać `mirror_ok`; fallback na Hub z osobnym budżetem.
   **Nie** stosować bezwarunkowego przepisywania URL (patrz przypadek `openjdk`).
@@ -894,8 +940,9 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 
 ## Stan repozytorium
 
-Repozytorium zawiera dziś `Dockerfile`, `requirements.txt`, `scanner.py` (PoC) oraz ten
-dokument. PoC nie jest podstawą dalszej pracy — jego dług techniczny jest spisany
+Repozytorium zawiera `Dockerfile`, `requirements.txt`, `scanner.py` (PoC), ten dokument
+oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2)
+i `GetTags.py` (Krok 3). PoC nie jest podstawą dalszej pracy — jego dług techniczny jest spisany
 w [osobnym rozdziale](#dług-techniczny-w-istniejącym-kodzie), a implementacja idzie od nowa
 według Kroków 1–6.
 
