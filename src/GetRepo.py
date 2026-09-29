@@ -16,31 +16,22 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
-from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
-from dotenv import load_dotenv
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
 
-try:
-    from requests_cache import CachedSession
-except ImportError:
-    CachedSession = None
-
-ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
-
-HUB_API = "https://hub.docker.com/v2"
-HUB_AUTH = HUB_API + "/auth/token"
-HUB_LIBRARY = HUB_API + "/repositories/library/"
-HUB_SEARCH = HUB_API + "/search/repositories/"
+from hub_http import (
+    HUB_LIBRARY,
+    HUB_SEARCH,
+    PAGE_SIZE,
+    TIMEOUT,
+    build_session,
+    fetched_at,
+    iter_pages,
+)
 
 GCR_HOST = "https://gcr.io"
 GCR_DISTROLESS = f"{GCR_HOST}/v2/distroless"
@@ -60,10 +51,6 @@ REJECT_TAG_RE = re.compile(
     r"|-(?:amd64|arm64|arm|s390x|ppc64le|riscv64)$"
 )
 
-PAGE_SIZE = 100
-TIMEOUT = (10, 30)
-USER_AGENT = "pwr-thesis-fetcher/0.1"
-MAX_PAGES = 500
 MANIFEST_ACCEPT = (
     "application/vnd.oci.image.index.v1+json,"
     "application/vnd.docker.distribution.manifest.list.v2+json,"
@@ -122,112 +109,6 @@ class DistrolessRepo:
         record = asdict(self)
         record["repo_key"] = self.key
         return record
-
-
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise SystemExit(f"Brak {name}. Ustaw w .env (patrz .env.example).")
-    return value
-
-
-def fetch_jwt(session: requests.Session, username: str, pat: str) -> str:
-    """PAT nie wolno wysylac jako Bearer. Hub wymaga JWT z /v2/auth/token."""
-    response = session.post(
-        HUB_AUTH,
-        json={"identifier": username, "secret": pat},
-        timeout=TIMEOUT,
-    )
-    if response.status_code != 200:
-        raise SystemExit(
-            f"Logowanie Hub nieudane ({response.status_code}). "
-            "Sprawdz DOCKER_HUB_USERNAME i DOCKER_HUB_PAT."
-        )
-    token = response.json().get("access_token") or response.json().get("token")
-    if not token:
-        raise SystemExit("Hub nie zwrocil access_token w odpowiedzi /v2/auth/token.")
-    return token
-
-
-def build_session(
-    use_cache: bool = True,
-    cache_name: str = "cache/hub_api",
-    *,
-    hub_auth: bool = False,
-) -> requests.Session:
-    retry = Retry(
-        total=5,
-        backoff_factor=1.5,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST", "HEAD"),
-        respect_retry_after_header=True,
-    )
-
-    if use_cache and CachedSession is not None:
-        Path(cache_name).parent.mkdir(parents=True, exist_ok=True)
-        session: requests.Session = CachedSession(
-            cache_name, backend="sqlite", expire_after=24 * 3600
-        )
-    else:
-        if use_cache:
-            log.warning("requests-cache niezainstalowany - kazde uruchomienie uderza w API")
-        session = requests.Session()
-
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    session.headers.update({"User-Agent": USER_AGENT})
-
-    if hub_auth:
-        jwt = fetch_jwt(
-            session, _require_env("DOCKER_HUB_USERNAME"), _require_env("DOCKER_HUB_PAT")
-        )
-        session.headers["Authorization"] = f"Bearer {jwt}"
-    return session
-
-
-def _fetched_at(response: requests.Response) -> str:
-    moment = getattr(response, "created_at", None) or datetime.now(timezone.utc)
-    return moment.isoformat()
-
-
-def _get_page(
-    session: requests.Session,
-    url: str,
-    params: dict[str, Any] | None,
-) -> tuple[dict[str, Any], str]:
-    response = session.get(url, params=params, timeout=TIMEOUT)
-    if response.status_code == 403 and "anonymous" in response.text:
-        raise RuntimeError(
-            "Hub zwrocil limit anonimowy (403) mimo JWT. "
-            "Token wygasl albo Authorization nie jest ustawione."
-        )
-    response.raise_for_status()
-    return response.json(), _fetched_at(response)
-
-
-def iter_pages(
-    session: requests.Session,
-    url: str,
-    params: dict[str, Any] | None = None,
-    max_pages: int = MAX_PAGES,
-) -> Iterator[tuple[dict[str, Any], str]]:
-    visited: set[str] = set()
-    page = 0
-
-    while url:
-        page += 1
-        if page > max_pages:
-            log.debug("stop po %d stronach (limit)", max_pages)
-            return
-        if url in visited:
-            raise RuntimeError(f"paginacja zapetlona na {url}")
-        visited.add(url)
-
-        payload, moment = _get_page(session, url, params)
-        log.debug("  strona %d: %d rekordow", page, len(payload.get("results") or []))
-        yield payload, moment
-
-        url = payload.get("next")
-        params = None
 
 
 def from_library(raw: dict[str, Any], moment: str) -> Repo:
@@ -342,9 +223,10 @@ def manifest_exists(session: requests.Session, name: str, tag: str) -> tuple[boo
         allow_redirects=True,
     )
     if response.status_code == 200:
-        return True, _fetched_at(response)
+        return True, fetched_at(response)
     if response.status_code == 404:
-        return False, _fetched_at(response)
+        return False, fetched_at(response)
+    # Niektore registry wymagaja GET zamiast HEAD.
     if response.status_code in (400, 405):
         response = session.get(
             url,
@@ -354,11 +236,11 @@ def manifest_exists(session: requests.Session, name: str, tag: str) -> tuple[boo
         )
         response.close()
         if response.status_code == 200:
-            return True, _fetched_at(response)
+            return True, fetched_at(response)
         if response.status_code == 404:
-            return False, _fetched_at(response)
+            return False, fetched_at(response)
     response.raise_for_status()
-    return False, _fetched_at(response)
+    return False, fetched_at(response)
 
 
 def candidate_distroless_names(children: list[str], readme: set[str]) -> list[str]:
