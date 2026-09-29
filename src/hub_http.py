@@ -31,6 +31,12 @@ PAGE_SIZE = 100
 TIMEOUT = (10, 30)
 USER_AGENT = "pwr-thesis-fetcher/0.1"
 MAX_PAGES = 500
+MANIFEST_ACCEPT = (
+    "application/vnd.oci.image.index.v1+json,"
+    "application/vnd.docker.distribution.manifest.list.v2+json,"
+    "application/vnd.docker.distribution.manifest.v2+json,"
+    "application/vnd.oci.image.manifest.v1+json"
+)
 
 log = logging.getLogger("hub_http")
 

@@ -1,13 +1,18 @@
-"""Krok 4 - klasyfikacja wariantu utwardzenia i linii OS z nazw tagow.
+"""Krok 4 - klasyfikacja wariantu, linia OS i sciezka pobierania (pull_ref).
 
-Wejscie: tagi Hub z Kroku 3 (tags*.jsonl) + katalog distroless z Kroku 2.
-Wyjscie: results/classified.jsonl - jeden wiersz na tag, nic nie jest odrzucane;
-wykluczenia (Windows, onbuild, brak amd64) trafiaja do excluded_reason, a wybor
-proby nalezy do Kroku 5.
+Czesc A (classify, offline):
+  tagi Hub z Kroku 3 + katalog distroless z Kroku 2 -> results/classified.jsonl.
+  Nic nie jest odrzucane; wykluczenia (Windows, onbuild, brak amd64) trafiaja do
+  excluded_reason, a wybor proby nalezy do Kroku 5.
+  Tag bez sufiksu OS (`3.13-slim`, `latest`) dziedziczy os_line po tagu z tym samym
+  manifestem amd64 (`3.13-slim-trixie`) - bez tego nie da sie dobrac linii distroless
+  zgodnej z baza partnera (wymog z pilotazu).
 
-Tag bez sufiksu OS (`3.13-slim`, `latest`) dziedziczy os_line po tagu z tym samym
-digestem w tym samym repozytorium (`3.13-slim-trixie`) - bez tego nie da sie
-dobrac linii distroless zgodnej z baza partnera (wymog z pilotazu).
+Czesc B (siec):
+  probe-repos - jedna sonda mirror.gcr.io na repozytorium -> cache/mirror_probe.jsonl
+  assign      - registry + pull_ref pinowany digestem amd64 -> results/refs.jsonl
+  probe-tags  - sonda per wiersz na wybranej matrycy (po Kroku 5); lustro ma dziury
+                takze dla pojedynczych starych tagow, nie tylko dla calych repo.
 """
 
 from __future__ import annotations
@@ -16,13 +21,25 @@ import argparse
 import itertools
 import json
 import logging
+import math
 import re
 from collections import Counter
 from collections.abc import Iterable, Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
+
+from hub_http import MANIFEST_ACCEPT, TIMEOUT, build_session
+
 log = logging.getLogger("classify")
+
+MIRROR_HOST = "mirror.gcr.io"
+HUB_REGISTRY = "docker.io"
+GCR_HOST = "gcr.io"
+HUB_PULL_BUDGET = 200
+HUB_BUDGET_WINDOW_H = 6
 
 DEBIAN_CODENAMES = {
     "forky": "debian14",
@@ -300,8 +317,173 @@ def classify(
     return stats
 
 
+# --- Czesc B: sonda lustra i pull_ref ---------------------------------------
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def head_manifest(session: requests.Session, host: str, repo: str, reference: str) -> int:
+    """HEAD na manifest; zwraca kod HTTP (200 = jest, 404 = brak)."""
+    response = session.head(
+        f"https://{host}/v2/{repo}/manifests/{reference}",
+        headers={"Accept": MANIFEST_ACCEPT},
+        timeout=TIMEOUT,
+        allow_redirects=True,
+    )
+    if response.status_code in (200, 404):
+        return response.status_code
+    if 400 <= response.status_code < 500:
+        log.warning("  %s/%s@%s: HTTP %d", host, repo, reference[:19], response.status_code)
+        return response.status_code
+    response.raise_for_status()
+    return response.status_code
+
+
+def load_probe_cache(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.is_file():
+        return {}
+    return {row["repo_key"]: row for row in read_jsonl([path])}
+
+
+def representative(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Najswiezszy tag bez wykluczenia - nie kazde repo ma `latest`."""
+    usable = [r for r in rows if r["excluded_reason"] is None and r["arch_digest"]]
+    if not usable:
+        return None
+    return max(usable, key=lambda r: r["tag_last_pushed"] or "")
+
+
+def probe_repos(
+    session: requests.Session,
+    classified_path: Path,
+    cache_path: Path,
+) -> Counter[str]:
+    cache = load_probe_cache(cache_path)
+    stats: Counter[str] = Counter(cached=len(cache))
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    hub_rows = (r for r in read_jsonl([classified_path]) if r["source_registry"] == "hub")
+    with cache_path.open("a", encoding="utf-8") as handle:
+        for repo_key, group in itertools.groupby(hub_rows, key=lambda r: r["repo_key"]):
+            if repo_key in cache:
+                continue
+            probe = representative(list(group))
+            if probe is None:
+                stats["no_usable_tag"] += 1
+                continue
+            status = head_manifest(session, MIRROR_HOST, repo_key, probe["arch_digest"])
+            record = {
+                "repo_key": repo_key,
+                "probe_tag": probe["tag"],
+                "probe_digest": probe["arch_digest"],
+                "status": status,
+                "mirror_ok_repo": status == 200,
+                "probed_at": _now(),
+            }
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
+            stats["mirror_ok" if status == 200 else "mirror_missing"] += 1
+            log.info("  %-40s %s (%s)", repo_key, status, probe["tag"])
+    return stats
+
+
+def resolve_gcr_digests(session: requests.Session, repo_key: str) -> tuple[str | None, str | None]:
+    """(digest indeksu, digest manifestu amd64) dla gcr.io/distroless/<repo>:latest."""
+    repo = repo_key.removeprefix(f"{GCR_HOST}/")
+    response = session.get(
+        f"https://{GCR_HOST}/v2/{repo}/manifests/latest",
+        headers={"Accept": MANIFEST_ACCEPT},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    index_digest = response.headers.get("Docker-Content-Digest")
+    payload = response.json()
+    for manifest in payload.get("manifests") or []:
+        platform = manifest.get("platform") or {}
+        if platform.get("architecture") == "amd64" and platform.get("os") == "linux":
+            return index_digest, manifest["digest"]
+    # Pojedynczy manifest zamiast indeksu - sam jest obrazem amd64.
+    return index_digest, index_digest if not payload.get("manifests") else None
+
+
+def hub_pull_ref(row: dict[str, Any], via_mirror: bool) -> str | None:
+    if not row["arch_digest"]:
+        return None
+    host = MIRROR_HOST if via_mirror else HUB_REGISTRY
+    return f"{host}/{row['repo_key']}@{row['arch_digest']}"
+
+
+def budget_line(hub_rows: int) -> str:
+    batches = math.ceil(hub_rows / HUB_PULL_BUDGET)
+    return (
+        f"{hub_rows} obrazow przez Hub = {batches} partii po {HUB_PULL_BUDGET} "
+        f"(~{batches * HUB_BUDGET_WINDOW_H} h)"
+    )
+
+
+def assign(
+    session: requests.Session,
+    classified_path: Path,
+    cache_path: Path,
+    out_path: Path,
+) -> Counter[str]:
+    probes = load_probe_cache(cache_path)
+    stats: Counter[str] = Counter()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with out_path.open("w", encoding="utf-8") as handle:
+        for row in read_jsonl([classified_path]):
+            if row["source_registry"] == "gcr":
+                row["digest"], row["arch_digest"] = resolve_gcr_digests(session, row["repo_key"])
+                row["registry"] = "gcr"
+                row["mirror_ok_repo"] = None
+                row["pull_ref"] = (
+                    f"{row['repo_key']}@{row['arch_digest']}" if row["arch_digest"] else None
+                )
+            else:
+                probe = probes.get(row["repo_key"])
+                mirror_ok_repo = probe["mirror_ok_repo"] if probe else None
+                if probe is None:
+                    stats["hub_not_probed"] += 1
+                row["mirror_ok_repo"] = mirror_ok_repo
+                row["registry"] = "mirror" if mirror_ok_repo else "hub"
+                row["pull_ref"] = hub_pull_ref(row, via_mirror=bool(mirror_ok_repo))
+            row["mirror_ok"] = None
+            if row["excluded_reason"] is None:
+                stats[f"registry:{row['registry']}"] += 1
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return stats
+
+
+def probe_tags(session: requests.Session, in_path: Path, out_path: Path) -> Counter[str]:
+    """Sonda per wiersz: potwierdza, ze lustro ma dokladnie ten manifest amd64."""
+    stats: Counter[str] = Counter()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with out_path.open("w", encoding="utf-8") as handle:
+        for row in read_jsonl([in_path]):
+            if row.get("registry") in ("mirror", "hub") and row.get("arch_digest"):
+                if row.get("mirror_ok_repo") is False:
+                    row["mirror_ok"] = False
+                else:
+                    status = head_manifest(session, MIRROR_HOST, row["repo_key"], row["arch_digest"])
+                    row["mirror_ok"] = status == 200
+                row["registry"] = "mirror" if row["mirror_ok"] else "hub"
+                row["pull_ref"] = hub_pull_ref(row, via_mirror=row["mirror_ok"])
+                stats[f"registry:{row['registry']}"] += 1
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return stats
+
+
+def _log_stats(stats: Counter[str]) -> None:
+    for key, value in sorted(stats.items()):
+        log.info("  %-28s %d", key, value)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Krok 4 - klasyfikacja tagow")
+    parser = argparse.ArgumentParser(description="Krok 4 - klasyfikacja tagow i pull_ref")
     sub = parser.add_subparsers(dest="command", required=True)
 
     cls = sub.add_parser("classify", help="czesc A: klasa + linia OS, offline")
@@ -317,6 +499,24 @@ def main() -> None:
     cls.add_argument("--out", type=Path, default=Path("results/classified.jsonl"))
     cls.add_argument("--verbose", "-v", action="store_true")
 
+    probe_cache = Path("cache/mirror_probe.jsonl")
+
+    prb = sub.add_parser("probe-repos", help="czesc B1: sonda lustra per repozytorium")
+    prb.add_argument("--in", dest="in_path", type=Path, default=Path("results/classified.jsonl"))
+    prb.add_argument("--cache", type=Path, default=probe_cache)
+    prb.add_argument("--verbose", "-v", action="store_true")
+
+    asg = sub.add_parser("assign", help="czesc B2: registry + pull_ref pinowany digestem")
+    asg.add_argument("--in", dest="in_path", type=Path, default=Path("results/classified.jsonl"))
+    asg.add_argument("--cache", type=Path, default=probe_cache)
+    asg.add_argument("--out", type=Path, default=Path("results/refs.jsonl"))
+    asg.add_argument("--verbose", "-v", action="store_true")
+
+    ptg = sub.add_parser("probe-tags", help="sonda per wiersz na matrycy (po Kroku 5)")
+    ptg.add_argument("--in", dest="in_path", type=Path, required=True)
+    ptg.add_argument("--out", type=Path, required=True)
+    ptg.add_argument("--verbose", "-v", action="store_true")
+
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -325,10 +525,28 @@ def main() -> None:
     )
 
     if args.command == "classify":
-        stats = classify(args.tags, None if args.no_gcr else args.gcr, args.out)
-        for key, value in sorted(stats.items()):
-            log.info("  %-28s %d", key, value)
+        _log_stats(classify(args.tags, None if args.no_gcr else args.gcr, args.out))
         log.info("gotowe -> %s", args.out)
+        return
+
+    # Wyniki sond maja wlasny cache (plik), wiec requests-cache jest zbedny.
+    session = build_session(use_cache=False, hub_auth=False)
+    try:
+        if args.command == "probe-repos":
+            _log_stats(probe_repos(session, args.in_path, args.cache))
+            log.info("gotowe -> %s", args.cache)
+        elif args.command == "assign":
+            stats = assign(session, args.in_path, args.cache, args.out)
+            _log_stats(stats)
+            log.info("kandydaci (przed Krokiem 5): %s", budget_line(stats["registry:hub"]))
+            log.info("gotowe -> %s", args.out)
+        elif args.command == "probe-tags":
+            stats = probe_tags(session, args.in_path, args.out)
+            _log_stats(stats)
+            log.info("matryca: %s", budget_line(stats["registry:hub"]))
+            log.info("gotowe -> %s", args.out)
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":

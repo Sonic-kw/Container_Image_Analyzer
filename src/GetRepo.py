@@ -26,6 +26,7 @@ import requests
 from hub_http import (
     HUB_LIBRARY,
     HUB_SEARCH,
+    MANIFEST_ACCEPT,
     PAGE_SIZE,
     TIMEOUT,
     build_session,
@@ -49,12 +50,6 @@ REJECT_TAG_RE = re.compile(
     r"|^[0-9a-f]{40}$"
     r"|^(?:debug|debug-nonroot|nonroot)$"
     r"|-(?:amd64|arm64|arm|s390x|ppc64le|riscv64)$"
-)
-
-MANIFEST_ACCEPT = (
-    "application/vnd.oci.image.index.v1+json,"
-    "application/vnd.docker.distribution.manifest.list.v2+json,"
-    "application/vnd.docker.distribution.manifest.v2+json"
 )
 
 # Zapytania = technologie (nie klasy utwardzenia). Uzasadnij w rozdz. 2.
