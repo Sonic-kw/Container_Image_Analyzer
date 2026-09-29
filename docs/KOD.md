@@ -5,8 +5,7 @@ pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia me
 (dlaczego cztery klasy, dlaczego tylko `latest` z distroless, skąd próg 10 tys.) są w
 [`PLAN.md`](PLAN.md); tutaj pojawiają się tylko tam, gdzie tłumaczą konkretną linię kodu.
 
-Kroki 5 (matryca) i 6 (skaner Trivy) nie mają jeszcze kodu. `scanner.py` w katalogu głównym
-to PoC sprzed planu i nie jest częścią potoku.
+Kroki 5 (matryca) i 6 (skaner Trivy) nie mają jeszcze kodu.
 
 ## Spis treści
 
@@ -65,8 +64,8 @@ bieżącego katalogu.
 
 ## 2. Uruchomienie
 
-**Zależności** (`requirements.txt`): `requests`, `requests_cache`, `python-dotenv`. Fetcher nie
-używa `numpy`, `pandas` ani `tqdm` — te są dla `scanner.py`. `requests_cache` jest opcjonalny:
+**Zależności** (`requirements.txt`): `requests`, `requests_cache`, `python-dotenv`.
+`requests_cache` jest opcjonalny:
 bez niego kod działa, tylko bez cache HTTP (patrz [rozdział 11](#11-cache-i-wznawianie)).
 
 **Sekrety.** Plik `.env` w katalogu głównym (wzór: `.env.example`):

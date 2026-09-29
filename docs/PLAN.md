@@ -770,7 +770,7 @@ Stan obecny i co z nim zrobić, w kolejności ważności:
    dlatego obrazy badane lądowały w lokalnym storage Dockera i zaśmiecały komputer. Jawne
    `--image-src remote` wycina tę ścieżkę.
 2. **Usunąć `RUN apt-get install -y docker.io`.** Pakiet dostarcza Docker CLI, którego
-   **nic nie używa** — `scanner.py` wywołuje wyłącznie `trivy`, nigdy `docker`. Był potrzebny
+   **nic nie używa** — PoC `scanner.py` wywoływał wyłącznie `trivy`, nigdy `docker`. Był potrzebny
    tylko przy założeniu DooD. Zysk: mniejszy obraz narzędzia i brak klienta Dockera w środku, co
    jest spójne z tematem pracy.
 3. **Podbić wersję Trivy — `v0.45.1` nie jest już do pobrania.** To nie jest kwestia „starej,
@@ -783,13 +783,14 @@ Stan obecny i co z nim zrobić, w kolejności ważności:
    wydania było widoczne od razu przy budowaniu. **Użytą wersję trzeba zapisać w pracy**, bo
    wpływa na wyniki skanów.
 4. **Dodać `COPY` źródeł** — potrzebne, ale **nie pilne**. Dziś obraz kopiuje tylko
-   `requirements.txt`, a `CMD ["python", "scanner.py"]` działa wyłącznie dzięki montowaniu.
+   `requirements.txt`, a kod jest dostępny wyłącznie przez montowanie; `CMD` uruchamia powłokę
+   (do 29.09.2026 uruchamiał usunięty `scanner.py`).
    Do rozwoju (Kroki 1–6) montowanie jest wygodniejsze, bo nie wymaga przebudowy po każdej
    zmianie. `COPY` i bind mount **nie kolidują** — montowanie przesłania skopiowaną warstwę, więc
    można mieć oba: `COPY` daje odtwarzalny artefakt do opisania w pracy, mount zostaje trybem
    roboczym. Termin: przed pisaniem rozdziału o narzędziu, nie przed Krokiem 1.
 5. **Przypiąć wersje w `requirements.txt`** i dodać `pyarrow` (patrz
-   [Dług techniczny](#dług-techniczny-w-istniejącym-kodzie)).
+   [Dług techniczny PoC](#dług-techniczny-poc--wymagania-dla-kroku-6)).
 
 ### Krytyczne: zamrożenie bazy CVE na czas kampanii
 
@@ -989,27 +990,29 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
 Sztucznego doważania klas, crawla **całego** GCR (tylko projekt `distroless`), bazy danych,
 UI, statystyk CVE na tym etapie, jednego przebiegu 10 tys. pulli przez Hub bez lustra.
 
-## Dług techniczny w istniejącym kodzie
+## Dług techniczny PoC — wymagania dla Kroku 6
 
-Zidentyfikowany przy rekonesansie, do domknięcia przy refaktoryzacji:
+PoC `scanner.py` został usunięty z repozytorium (29.09.2026, commit `57ef163`; osiągalny
+w historii gita). Błędy znalezione w nim przy rekonesansie zostają jako **wymagania dla skanera
+z Kroku 6**:
 
-- `run_trivy_scan` nie ma `timeout`, a jego wartość zwracana jest ignorowana w `main()` — stąd
+- Wywołanie Trivy musi mieć `timeout`, a jego wynik musi być sprawdzany — w PoC brak obu dał
   75 raportów zamiast 100 zadanych, czyli ~25 **cichych porażek**.
-- Klient HTTP ma `timeout=10` i gołe `except Exception` zwracające `None`, po czym `main()`
-  wywołuje `len(images)` i wysypuje się na `None`. Docelowo: `HTTPAdapter` z
+- Klient HTTP PoC miał `timeout=10` i gołe `except Exception` zwracające `None`, po czym
+  `len(images)` wysypywało się na `None`. Fetcher już to rozwiązuje (`hub_http.build_session`:
   `urllib3.Retry(total=5, backoff_factor=1.5, status_forcelist=[429,500,502,503,504],
-  respect_retry_after_header=True)` i rozdzielne timeouty `(connect=10, read=30)`.
-- `create_summary_report` buduje DataFrame z listy wszystkich rekordów naraz. 75 obrazów dało
-  39,5 tys. wierszy, więc 10 tys. obrazów da ~5 mln wierszy i wyczerpie RAM. Potrzebny zapis
-  przyrostowy do Parquet.
+  respect_retry_after_header=True)` i timeouty `(connect=10, read=30)`).
+- PoC budował DataFrame z listy wszystkich rekordów naraz. 75 obrazów dało 39,5 tys. wierszy,
+  więc 10 tys. obrazów da ~5 mln wierszy i wyczerpie RAM. Potrzebny zapis przyrostowy do Parquet.
 - Skan musi używać `--list-all-pkgs`, co da liczbę pakietów oraz wykrycie
   `bash`/`busybox`/`apt`/`apk` — to metryka funkcjonalności do pkt 7.
-- `Dockerfile` nie zawiera `COPY` źródeł — kod działa wyłącznie z montowania. Instaluje też
-  `docker.io`, którego nic nie używa. Szczegóły i priorytety:
-  [Zmiany w `Dockerfile`](#zmiany-w-dockerfile).
-- `requirements.txt` bez przypiętych wersji; do przypięcia wszystkie, do dołożenia `pyarrow`.
-- `run_trivy_scan` nie przekazuje `--image-src remote`, więc Trivy odpytuje najpierw demona hosta
-  i ściąga obrazy do lokalnego storage Dockera — źródło zaśmiecania maszyny.
+- Skan musi przekazywać `--image-src remote`; PoC tego nie robił, więc Trivy odpytywał najpierw
+  demona hosta i ściągał obrazy do lokalnego storage Dockera — źródło zaśmiecania maszyny.
+- `Dockerfile` nie zawiera `COPY` źródeł — kod działa wyłącznie z montowania. Szczegóły
+  i priorytety: [Zmiany w `Dockerfile`](#zmiany-w-dockerfile).
+- `requirements.txt` zawiera już tylko zależności fetchera (`requests`, `requests_cache`,
+  `python-dotenv`), wciąż bez przypiętych wersji; do przypięcia wszystkie, a przy Kroku 6
+  do dołożenia `pyarrow`.
 
 ### Rozmiar danych i dysk
 
@@ -1023,13 +1026,13 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 
 ## Stan repozytorium
 
-Repozytorium zawiera `Dockerfile`, `requirements.txt`, `scanner.py` (PoC), ten dokument
-oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
+Repozytorium zawiera `Dockerfile` (środowisko Trivy), `requirements.txt`, dokumentację
+w `docs/` (ten plan i opis kodu [`KOD.md`](KOD.md)) oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
 `GetTags.py` (Krok 3) i `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`). Wyniki
 (`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
-digestów. PoC nie jest podstawą dalszej pracy — jego dług techniczny jest spisany
-w [osobnym rozdziale](#dług-techniczny-w-istniejącym-kodzie), a implementacja idzie od nowa
-według Kroków 1–6.
+digestów. PoC `scanner.py` został usunięty (commit `57ef163`); jego błędy są spisane jako
+[wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6), a implementacja idzie od
+nowa według Kroków 1–6.
 
 ### Implementacja fetchera z sierpnia — wątek zamknięty
 
