@@ -889,6 +889,9 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   Zamknięty: `src/GetTags.py` → `results/tags.jsonl`, cache per repozytorium w
   `cache/hub_tags/` (wznowienie bez ponownych zapytań). Pilot `python`: 3923/3923 tagów
   w 40 stronach, czyli pełna lista powyżej progu anonimowego.
+  Pełny przebieg 29.09.2026: 179 repozytoriów `library/` (187 879 tagów) oraz repozytoria
+  z wyszukiwania z `pull_count` ≥ 10 000 — 645 repozytoriów (146 698 tagów), próg przyjęty
+  jako jawne kryterium doboru próby do rozdziału 2.
 - [x] **Krok 4 — klasyfikacja + `pull_ref` + sonda lustra.** Dla każdego obrazu sprawdzić
   dostępność na `mirror.gcr.io` i zapisać `mirror_ok`; fallback na Hub z osobnym budżetem.
   **Nie** stosować bezwarunkowego przepisywania URL (patrz przypadek `openjdk`).
@@ -898,8 +901,11 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   aliasów rozwiązywana po wspólnym digeście amd64). `assign` → `results/refs.jsonl`
   (`pull_ref` pinowany digestem amd64; distroless z indeksu OCI w `gcr.io`). `probe-tags`
   weryfikuje lustro per wiersz i **musi zostać uruchomiony na matrycy po Kroku 5**.
-  Wynik dla `library/` + GCR: 132 563 standard, 15 639 slim, 39 677 alpine, 56 distroless.
-  Do powtórzenia `classify` po pobraniu tagów repozytoriów z wyszukiwania.
+  Wynik dla `library/` + wyszukiwania + GCR: 253 563 standard, 25 179 slim, 55 835 alpine,
+  56 distroless (licząc z wykluczonymi); wykluczone 40 945 `no_amd64`, 20 526 `windows`,
+  1 278 `onbuild`, zostaje 271 884 wierszy. Linii OS
+  nie da się ustalić dla 40% wierszy `library/` i 82% wierszy z wyszukiwania (tagi bez
+  sufiksu systemu, np. `flywheel/python`, `amazon/aws-lambda-*`).
 - [ ] **Krok 5 — matryca 10 tys.** Merge Hub + GCR, dedup po `layer_key`, kwoty miękkie,
   wyliczenie `paired` względem wariantu `standard` tej samej technologii.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
