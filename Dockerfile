@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # Domyślnie kontener będzie czekał na polecenie (interaktywny)
-CMD ["python", "scanner.py"]
+CMD ["bash"]
