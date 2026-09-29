@@ -189,8 +189,19 @@ def select_repos(
     *,
     repos: list[str] | None,
     limit: int | None,
+    source: str | None = None,
+    min_pulls: int | None = None,
 ) -> list[dict[str, Any]]:
     selected = catalog
+    if source:
+        selected = [row for row in selected if row.get("source") == source]
+    if min_pulls is not None:
+        # library/ wchodzi zawsze - progu uzywamy tylko do odsiania szumu z search/.
+        selected = [
+            row
+            for row in selected
+            if row.get("source") == "library" or (row.get("pull_count") or 0) >= min_pulls
+        ]
     if repos:
         wanted = set(repos)
         selected = [
@@ -224,22 +235,34 @@ def build_tags(
 ) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     total = 0
+    missing: list[str] = []
 
     with out_path.open("w", encoding="utf-8") as handle:
-        for row in repos:
+        for index, row in enumerate(repos, start=1):
             namespace = row.get("namespace") or "library"
             name = row["name"]
-            tags = fetch_repo_tags(
-                session,
-                namespace,
-                name,
-                cache_dir=cache_dir,
-                use_disk_cache=use_disk_cache,
-            )
+            log.info("[%d/%d] %s/%s", index, len(repos), namespace, name)
+            try:
+                tags = fetch_repo_tags(
+                    session,
+                    namespace,
+                    name,
+                    cache_dir=cache_dir,
+                    use_disk_cache=use_disk_cache,
+                )
+            except requests.HTTPError as error:
+                # Repo z katalogu moglo zostac usuniete z Huba w miedzyczasie.
+                if error.response is not None and error.response.status_code == 404:
+                    log.warning("  %s/%s: 404, pomijam", namespace, name)
+                    missing.append(f"{namespace}/{name}")
+                    continue
+                raise
             for tag in tags:
                 handle.write(json.dumps(tag.to_record(), ensure_ascii=False) + "\n")
             total += len(tags)
 
+    if missing:
+        log.warning("pominieto %d repozytoriow z 404: %s", len(missing), ", ".join(missing))
     return total
 
 
@@ -264,6 +287,17 @@ def main() -> None:
         "--repos",
         nargs="*",
         help="tylko te nazwy (name lub namespace/name); bez katalogu dziala syntetycznie",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("library", "search"),
+        help="tylko repozytoria z tego zrodla Kroku 1",
+    )
+    parser.add_argument(
+        "--min-pulls",
+        type=int,
+        default=None,
+        help="prog pull_count dla search/ (library/ wchodzi zawsze)",
     )
     parser.add_argument("--limit", type=int, default=None, help="max repozytoriow")
     parser.add_argument(
@@ -291,7 +325,13 @@ def main() -> None:
     else:
         catalog = load_catalog(args.catalog)
 
-    repos = select_repos(catalog, repos=args.repos, limit=args.limit)
+    repos = select_repos(
+        catalog,
+        repos=args.repos,
+        limit=args.limit,
+        source=args.source,
+        min_pulls=args.min_pulls,
+    )
     if not repos:
         raise SystemExit("Brak repozytoriow do przetworzenia.")
 
