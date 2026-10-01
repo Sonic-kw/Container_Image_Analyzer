@@ -53,6 +53,7 @@ zakresu. Pozostałe punkty albo poprzedzają kod, albo następują po nim.
 Wniosek, który warto mieć z tyłu głowy przy planowaniu czasu: **kroki kodu kończą się tam, gdzie
 zaczyna się właściwy ciężar pracy**. Krok 6 produkuje tabelę z liczbami, a punkty 5–7 dopiero
 z niej powstają. Rozbudowywanie skanera ponad to, czego wymaga matryca, nie przybliża do obrony.
+Metody dla punktów 5–7: [Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
 
 ### Literatura
 
@@ -544,6 +545,99 @@ Dodatkowe zawężenie: distroless istnieje tylko dla ~5 rodzin (`python`, `nodej
 `static`), więc trójkąt `standard`–`slim`/`alpine`–`distroless` domyka się dla kilku technologii.
 Dla pozostałych porównanie sięga tylko `slim` i `alpine`. Liczebność obu podzbiorów raportujemy
 osobno.
+
+## Plan analizy statystycznej (punkty 5–7)
+
+Ustalone 01.10.2026. Analiza powstaje po Kroku 6, na tabeli wyników skanu. Wszystkie testy są
+w `scipy.stats` (`wilcoxon`, `friedmanchisquare`, `spearmanr`).
+
+### Para — jednostka porównania
+
+Para to dwa obrazy **tej samej technologii, w tej samej wersji i na tej samej bazie**, różniące
+się tylko metodą utwardzenia. Grupa z matrycy (Krok 5):
+
+| Obraz | Klasa |
+| --- | --- |
+| `python:3.13.15-trixie` | `standard` — punkt odniesienia |
+| `python:3.13.15-slim-trixie` | `slim` |
+| `python:3.13.15-alpine3.23` | `alpine` |
+| `gcr.io/distroless/python3-debian13` | `distroless` |
+
+daje trzy pary: `slim`–`standard`, `alpine`–`standard`, `distroless`–`standard`. Dla każdej
+liczymy deltę metryki.
+
+Para jest potrzebna, bo **średnie klas nie są porównywalne**. Do `standard` wpadają `wordpress`,
+`archlinux` czy `gradle`, do `alpine` inny zestaw technologii — różnica średnich mierzyłaby
+skład klasy, nie utwardzenie (paradoks Simpsona). W parze technologia i wersja są stałe.
+Porównań średnich klas **nie wykonujemy**.
+
+### Dane z jednego skanu
+
+- **Bezpieczeństwo:** liczba CVE łącznie i per severity (`CRITICAL` / `HIGH` / `MEDIUM` /
+  `LOW`), CVE z dostępną poprawką, gęstość CVE na pakiet.
+- **Powierzchnia ataku:** rozmiar obrazu (`arch_size` z API Huba), liczba pakietów.
+- **Funkcjonalność:** obecność powłoki (`bash`, `sh`, `busybox`), menedżera pakietów
+  (`apt`, `apk`), narzędzi diagnostycznych.
+
+### Punkt 5 — wielowymiarowa analiza podatności (cała matryca)
+
+- **Statystyki opisowe per klasa:** mediana, kwartyle, rozstęp CVE, rozmiaru i liczby pakietów.
+  Mediana zamiast średniej, bo rozkład CVE jest skrajnie skośny (pilotaż: 3 612 vs 20).
+- **Korelacja Spearmana** CVE z rozmiarem i liczbą pakietów — czy większy obraz to więcej CVE.
+  Spearman, bo zależności nie są liniowe, a dane mają wartości skrajne.
+- **Świeżość bazy:** CVE względem linii systemu (`debian9`…`debian13`) i `tag_last_pushed`.
+  Pilotaż pokazał, że świeżość bazy potrafi przeważyć liczbę pakietów.
+- **Rozkład severity** per klasa — udział `CRITICAL` i `HIGH`.
+
+Tu wchodzą też obrazy bez pary — dają obraz całego ekosystemu oficjalnych obrazów.
+
+### Punkt 6 — porównanie metod utwardzania (tylko pary)
+
+- **Delta względna:** `(CVE_utwardzony − CVE_standard) / CVE_standard`; to samo dla rozmiaru
+  i liczby pakietów. Względna, bo spadek o 200 CVE znaczy co innego przy 300 i przy 3 600.
+- **Test Wilcoxona dla par** (*signed-rank*), osobno dla `slim`, `alpine`, `distroless`:
+  czy obraz utwardzony ma systematycznie mniej CVE niż jego `standard`. Nieparametryczny
+  odpowiednik testu t dla par — dane nie mają rozkładu normalnego.
+- **Wielkość efektu:** mediana delt z przedziałem ufności. Przy tysiącach par test prawie
+  zawsze wyjdzie istotny, więc ważniejsze jest *o ile* spada liczba CVE.
+- **Zależność obserwacji.** Pary z jednego repozytorium nie są niezależne (np. 783 pary `slim`
+  z zaledwie 25 repozytoriów). Główny test wykonujemy na **medianach delt per repozytorium** —
+  jedno repozytorium = jedna obserwacja. Wynik na wszystkich parach raportujemy pomocniczo.
+- **Porównanie metod między sobą:** **test Friedmana** na grupach z kompletem wariantów
+  (pomiary powtarzane, bez założenia normalności) — np. czy `alpine` redukuje CVE bardziej
+  niż `slim`.
+- **Distroless jako studium przypadku.** Ok. 41 obrazów w 28 grupach i tylko 4 technologiach
+  to za mało na mocne wnioskowanie. Tabela par z deltami per technologia i linia Debiana,
+  bez przedstawiania tego jako reprezentatywnej próby.
+
+### Punkt 7 — bezpieczeństwo vs funkcjonalność
+
+- **Wykres dwóch osi** per para: redukcja CVE względem `standard` vs utrata funkcjonalności
+  (spadek liczby pakietów, brak powłoki, brak menedżera pakietów). Każda klasa to osobna chmura.
+- **Tabela cech runtime'u** per klasa: odsetek obrazów z powłoką, `apt`/`apk`, narzędziami
+  diagnostycznymi. Bez testów — cechy wynikają wprost z budowy obrazów (distroless nie ma
+  powłoki z definicji).
+- **Rekomendacje doboru baz** z obu osi (np. „`slim` daje X% redukcji CVE przy zachowaniu
+  powłoki i `apt`”) plus wniosek o `nonroot`: utwardzenie użytkownika przy zerowej zmianie CVE.
+
+### Rozkład klas w matrycy — jak to opisać
+
+`standard` stanowi ok. 70% obrazów **zarówno w populacji, jak i w matrycy** (po regule minor
+18 010 z 25 877; w matrycy 7 101 z 9 975), więc losowanie niczego nie przekrzywia. Wynika to
+z podaży: na 178 repozytoriów `library/` tylko 91 ma jakikolwiek wariant `slim` lub `alpine`,
+`slim` oferuje 25 repozytoriów, `alpine` 73. To wynik sam w sobie (rozdz. 2 / 6):
+**utwardzone warianty nie są standardem ekosystemu.**
+
+Dla punktów 6–7 udział klasy nie ma znaczenia — liczy się liczba par i liczba repozytoriów
+z parą, raportowane osobno per klasa. Zdanie do pracy: *rozkład klas odzwierciedla podaż
+wariantów w ekosystemie obrazów oficjalnych; porównania metod utwardzania prowadzone są
+wyłącznie na parach w obrębie tej samej technologii i wersji.*
+
+**Otwarte (Krok 5):** obecne losowanie bierze tylko 783 z 3 392 dostępnych par `slim`, bo limit
+150 tnie repozytoria z największą liczbą par (`python`, `node`, `openjdk`), a miejsce zajmują
+grupy z samym `standard`. Propozycja: losowanie w **dwóch warstwach** — grupy sparowane
+z priorytetem i limitem 300 na repozytorium (szacunkowo ok. 1 400 par `slim`, ok. 2 400
+`alpine`, ok. 7,4 tys. obrazów), reszta do 10 tys. z obrazów bez pary na potrzeby punktu 5.
 
 ## Pilotaż weryfikujący metodykę (13.09.2026)
 
