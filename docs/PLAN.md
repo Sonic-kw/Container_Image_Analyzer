@@ -481,8 +481,8 @@ deterministyczne i zapisane w kodzie, żeby dało się je przytoczyć w rozdzial
 - Rozpoznawane linie: kodowe nazwy Debiana (`squeeze`…`forky` → `debianN`), Ubuntu, `alpineX.Y`
   oraz bazy firmowe (`oraclelinux`, `ubi`, `centos`, `amazonlinux`, `rockylinux`, `almalinux`).
 - **`prerelease`** to flaga, nie klasa: `rc`, `alpha`, `beta`, `preview`, `dev`, `nightly`,
-  `edge` i wersje z sufiksem tego typu. Decyzja, czy wydania przedpremierowe wchodzą do próby,
-  należy do Kroku 5.
+  `edge`, `ea` (buildy early access Javy) i wersje z sufiksem tego typu.
+  Wydania przedpremierowe **nie wchodzą do próby** (decyzja Kroku 5, 01.10.2026).
 - **Linia systemu z aliasu.** Tag bez sufiksu systemu (`python:3.13`, `latest`) dziedziczy linię
   od tagu o tym samym `arch_digest` (`3.13-trixie` → `debian13`), ale tylko gdy wszystkie aliasy
   wskazują jedną linię. Przy sprzeczności (np. obrazy `docker` z dwiema liniami alpine, `gradle`
@@ -950,30 +950,117 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
 - [ ] **Krok 5 — matryca 10 tys.** Merge Hub + GCR, dedup po `layer_key`, kwoty miękkie,
   wyliczenie `paired` względem wariantu `standard` tej samej technologii.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
-  Wejście z pełnego przebiegu Kroków 3–4 (29.09.2026) — decyzje do podjęcia tutaj:
-  - **Normalizacja `family`.** Nazwa repozytorium nie jest technologią: wyszukiwanie daje
-    `nodejs` obok `library/node`, `aws-lambda-python`, `zabbix-java-gateway`. Potrzebne jawne
-    mapowanie (lub odrzucenie) nazw spoza technologii bazowych, inaczej `paired` się nie domknie.
-  - **Duplikaty `library/`.** 3 087 wierszy z wyszukiwania ma ten sam `arch_digest` co obraz
-    oficjalny (np. przestrzeń `amd64/*` to przepakowane `library/`). Dedup po `arch_digest`
-    musi preferować wiersz `library/`.
-  - **Dominujące repozytoria.** `flywheel/python` ma 21 424 tagi, `amazon/*` 12 151,
-    `ccitest/*` 11 056 — limit per repozytorium jest konieczny, nie opcjonalny.
-  - **Brak linii systemu.** 40% wierszy `library/` i 82% z wyszukiwania nie ma `os_line`.
-    Dla parowania z distroless linia jest wymagana (patrz pilotaż: `debian12` vs `debian13`),
-    więc takie wiersze mogą wejść do matrycy, ale nie do par z distroless — albo trzeba ją
-    uzupełnić z samego skanu (Trivy podaje OS), co przesuwa parowanie za Krok 6.
-  - **`no_amd64`** (40 945) to głównie przestrzenie per architektura (`arm64v8`, `i386`,
-    `arm32v7`, `ppc64le`) oraz `chainguard` (7 115) — ten ostatni warto sprawdzić osobno,
-    bo to kandydat na korpus „distroless-like”.
-  - **`prerelease`** — włączyć czy wykluczyć; jedna reguła, zapisana.
-  Po złożeniu matrycy obowiązkowo `Classify.py probe-tags`, a udział ścieżki Hub raportowany
-  jako liczba partii po 200 / 6 h.
+  Szczegóły: [Krok 5 — decyzje i rozpisanie](#krok-5--decyzje-i-rozpisanie).
 - [ ] **Krok 6 — skaner.** Trivy na `pull_ref` z `--image-src remote`, **baza CVE zamrożona
   przed startem kampanii** (`--download-db-only`, potem `--skip-db-update`), partie poniżej
   limitu, resume gdy JSON raportu istnieje. Szczegóły i uzasadnienie:
   [Architektura kampanii skanowania](#architektura-kampanii-skanowania).
   `feat(scanner): skan pull_ref z resume, image-src remote i zamrozona baza CVE`
+
+### Krok 5 — decyzje i rozpisanie
+
+#### Jednostka matrycy: grupa technologii w jednej wersji
+
+Matryca nie jest listą niezależnie losowanych tagów, tylko zbiorem **grup**. Grupa to jedna
+technologia w jednej wersji, a w środku jej warianty utwardzenia:
+
+| Klasa | Obraz | Linia |
+| --- | --- | --- |
+| `standard` | `python:3.13-trixie` | `debian13` |
+| `slim` | `python:3.13-slim-trixie` | `debian13` |
+| `alpine` | `python:3.13-alpine3.22` | `alpine3.22` |
+| `distroless` (jeśli istnieje) | `gcr.io/distroless/python3-debian13` | `debian13` |
+
+`standard` jest punktem odniesienia, delty z punktu 7 liczone są względem niego. Większość
+grup ma tylko trzy pierwsze wiersze — distroless istnieje dla kilku technologii.
+
+#### Decyzje (01.10.2026)
+
+1. **Wydania przedpremierowe są wykluczone**, łącznie z buildami EA. `PRERELEASE_RE`
+   w `Classify.py` nie rozpoznaje tokenu `ea`, przez co `openjdk:28-ea-slim-trixie` był
+   traktowany jako stabilny — dotyczy to 8 884 z 10 196 zakwalifikowanych tagów
+   `library/openjdk` (87%). Poprawione w Kroku 4 (01.10.2026); po ponownym `classify`
+   i `assign` `openjdk` ma 1 312 stabilnych tagów (451 unikalnych obrazów amd64).
+2. **Tylko `library/` (Docker Official Images) plus `gcr.io/distroless`.** Repozytoria
+   z wyszukiwania nie wchodzą do matrycy. Powody: oficjalne obrazy mają jawny, publiczny proces
+   budowania i przeglądu, co łatwo opisać i obronić w rozdz. 2; wyszukiwanie dokłada głównie
+   szum (`flywheel/python` 7 807 unikalnych obrazów, `ccitest/python` 3 448) przy zaledwie
+   ~1 400 dodatkowych grupach z parą. Katalog z wyszukiwania (Kroki 1 i 3) zostaje jako spis
+   populacji i jest opisywany jako świadome zawężenie próby. Znika przy tym problem duplikatów
+   `amd64/*` i normalizacji nazw typu `aws-lambda-python`.
+3. **Wszystkie linie Debiana distroless** (`debian9`–`debian13`), ale dopasowanie partnera po
+   **(technologia, wersja, linia Debiana)**, nie po samej linii — patrz niżej.
+4. **Twardy limit 150 obrazów na repozytorium**, docelowo ~10 tys. obrazów. Pomiar na danych
+   z 29.09.2026 (bez prerelease, po dedupie `arch_digest`, reguła minor): `library/` daje
+   31 544 kandydatów, limit 150 przycina do ~12 100. Do 10 tys. schodzimy alokacją
+   proporcjonalną do `log(liczba grup)` w repozytorium. Końcowy N jest liczony, nie wymuszony —
+   drugi stopień deduplikacji (`layer_key`) może go jeszcze obniżyć.
+
+#### Dlaczego distroless tylko z Debianem i tylko po wersji
+
+Google buduje distroless **wyłącznie na Debianie** — wszystkie 56 repozytoriów z Kroku 2 ma
+sufiks `-debianN`. Pozostałe linie systemów (Ubuntu, alpine, UBI, Oracle Linux…) wchodzą do
+matrycy normalnie i biorą udział w porównaniach `standard` / `slim` / `alpine`; po prostu nie
+mają partnera distroless. Przykład: `eclipse-temurin` stoi na Ubuntu, więc nie sparuje się
+z distroless `java`.
+
+Obraz distroless zawiera **systemową wersję runtime'u z Debiana**, nie dowolną.
+`python3-debian13` pasuje więc tylko do grupy `python` 3.13 na `trixie`, `nodejs22-debian13`
+tylko do `node` 22 na `trixie`, `java21-debian13` tylko do Javy 21 na `trixie`. Wersje runtime'u
+w obrazach distroless trzeba odczytać przy implementacji (np. z configu obrazu), nie zakładać.
+
+Mapowanie technologii distroless na repozytorium `library/` (jawna tabela w kodzie):
+
+| distroless | partner w `library/` | uwaga |
+| --- | --- | --- |
+| `python3-*` | `python` | |
+| `nodejs*` | `node` | |
+| `java*` | `openjdk` | `library/java` jest przestarzałe (220 starych tagów); `eclipse-temurin` i `amazoncorretto` nie mają linii Debiana |
+| `static`, `base*`, `cc` | `debian` | `debian:13` vs `debian:13-slim` vs `base-debian13` |
+
+Ograniczenie do zapisania: `openjdk` jest na Hubie oznaczone jako przestarzałe. Trzeba sprawdzić,
+czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych liniach Debiana.
+
+#### Rozpisanie — `src/Matrix.py`
+
+1. [x] **Poprawka Kroku 4** (przed wszystkim): `ea` do tokenów prerelease, ponowne `classify`
+   (offline) i `assign`.
+2. **`Matrix.py select`** (offline, wejście `results/refs.jsonl`):
+   1. Filtr: `vendor = library` albo `source_registry = gcr`; bez `excluded_reason`;
+      bez `prerelease`; niepusty `arch_digest`.
+   2. Pierwszy stopień deduplikacji po `arch_digest`. Zostaje jeden tag kanoniczny (ten
+      z sufiksem linii OS, jeśli jest), reszta trafia do kolumny `aliases` — informacja
+      zostaje, ale obraz liczy się raz.
+   3. **Reguła minor:** dla (repozytorium, wersja `X.Y`, `flavor`, klasa, linia OS) zostaje
+      tylko ostatnio wypchnięty tag (`tag_last_pushed`). 199 wersji patch `python` sprowadza
+      się do 17 linii minor — to główne zabezpieczenie niezależności obserwacji.
+   4. Grupy: `pair_key = (repo_key, minor, flavor)`. `standard` i `slim` muszą mieć tę samą
+      linię OS; `alpine` bierze najnowszą linię alpine w grupie. Distroless dołącza wg tabeli
+      i dopasowania (technologia, wersja, linia Debiana). Grupy bez linii OS wchodzą do
+      matrycy, ale bez distroless.
+   5. Losowanie **całymi grupami**, nie wierszami — inaczej pary by się rozpadały. Distroless
+      wchodzi w całości jako pierwszy; kwoty repozytoriów ∝ `log(liczba grup)`, limit 150.
+      Losowanie z ustalonym ziarnem (powtarzalność), ok. 5% zapasu na drugi stopień dedupu.
+3. **`Matrix.py layers`** (sieć): `GET mirror.gcr.io/v2/<repo>/manifests/<arch_digest>`,
+   `layer_key = sha256(lista digestów warstw)`; distroless z `gcr.io`. **Nie z Docker Huba** —
+   `GET` manifestu liczy się tam do limitu 200 / 6 h. Przy chybieniu na lustrze
+   `layer_key = arch_digest` (ograniczenie do opisania). Potem dedup po `layer_key`
+   i dobranie z zapasu.
+4. **`paired`** po końcowym dedupie: grupa ma `standard` i ≥ 1 klasę utwardzoną. Dodatkowo
+   `triangle`: grupa z distroless.
+5. **Raport** `results/matrix_report.json` + log: rozkład klas, liczba grup, liczebność
+   podzbiorów `paired` i `triangle`, distroless per technologia i linia.
+6. **Obowiązkowo `Classify.py probe-tags`** na matrycy; udział ścieżki Hub jako liczba partii
+   po 200 / 6 h.
+7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md`.
+
+#### Poza zakresem (świadomie)
+
+- **`no_amd64`** (40 945) — głównie przestrzenie per architektura i `chainguard` (7 115).
+  Chainguard / Wolfi oraz Ubuntu chiselled to kandydaci na korpus „distroless-like” dla
+  baz innych niż Debian; poza obecnym zakresem.
+- **Wiersze bez linii OS** (40% `library/`) — nie są odrzucane, tylko nie parują się
+  z distroless. Uzupełnienie linii z wyniku skanu (Trivy podaje OS) jest możliwe po Kroku 6.
 
 ### Cel akceptacji
 
