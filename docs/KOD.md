@@ -365,7 +365,7 @@ Tag jest zamieniany na małe litery i cięty po `-` na tokeny. Każdy token prze
 | 7 | suita Debiana (`sid`, `stable`…), **tylko w `library/debian`** | `os_line` + ew. `prerelease` |
 | 8 | kodowa nazwa Ubuntu (`noble`…) | `os_line = ubuntuX.Y` |
 | 9 | `oraclelinux9`, `ubi8`, `centos7`, `al2023`… | `os_line = <nazwa><numer>` |
-| 10 | `rc`, `beta2`, `preview`, `nightly`, `edge`, `unstable`… | `prerelease = True` |
+| 10 | `rc`, `beta2`, `preview`, `nightly`, `edge`, `unstable`, `ea`… | `prerelease = True` |
 | 11 | `latest` | pomijany |
 | 12 | wersja (`3.13`, `v1.2.3`, `3.14.0rc1`) **na pozycji 0** | `version`; sufiks `a/b/rc/…` → `prerelease` |
 | — | cokolwiek innego | `leftover`, sklejane `-` w `flavor` (np. `fpm`, `jdk`, `apache`) |

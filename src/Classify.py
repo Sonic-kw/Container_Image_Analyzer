@@ -78,7 +78,7 @@ UBUNTU_CODENAMES = {
 ALPINE_RE = re.compile(r"^alpine(\d+\.\d+)?$")
 OTHER_OS_RE = re.compile(r"^(oraclelinux|ubi|centos|amazonlinux|al|rockylinux|almalinux)(\d+)$")
 VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)*(?:(a|b|rc|alpha|beta|pre)\d*)?$")
-PRERELEASE_RE = re.compile(r"^(?:rc|alpha|beta|preview|pre|dev|nightly|edge|unstable|m)\d*$")
+PRERELEASE_RE = re.compile(r"^(?:rc|alpha|beta|preview|pre|dev|nightly|edge|unstable|m|ea)\d*$")
 WINDOWS_PREFIXES = ("windowsservercore", "nanoserver", "ltsc", "windows")
 
 # Obrazy bazowe systemu: linie OS wyznacza wersja z tagu, nie sufiks.
