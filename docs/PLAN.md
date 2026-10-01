@@ -1041,6 +1041,29 @@ czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych 
    5. Losowanie **całymi grupami**, nie wierszami — inaczej pary by się rozpadały. Distroless
       wchodzi w całości jako pierwszy; kwoty repozytoriów ∝ `log(liczba grup)`, limit 150.
       Losowanie z ustalonym ziarnem (powtarzalność), ok. 5% zapasu na drugi stopień dedupu.
+
+   Zrobione (01.10.2026, ziarno 2026): 136 792 kandydatów → 69 722 po dedupie `arch_digest`
+   → 27 916 po regule minor → 19 129 grup. Wylosowano **9 975 obrazów w 7 465 grupach**
+   z 233 repozytoriów: 7 101 `standard`, 2 011 `alpine`, 808 `slim`, 55 `distroless`.
+   2 305 grup jest sparowanych (4,8 tys. obrazów), 28 zawiera distroless.
+
+   W implementacji grupa ma dodatkowo **linię OS** w kluczu: `python:3.11` na `bookworm`
+   i na `trixie` to dwie grupy, bo inaczej `python3-debian12` nie miałby partnera. `alpine`
+   dołącza do grupy z najnowszym obrazem `standard` danej wersji.
+
+   Wersje runtime'u distroless odczytane z configów obrazów: Python z `Entrypoint`
+   (`debian9`–`debian13` → 3.5 / 3.7 / 3.9 / 3.11 / 3.13), Java z `JAVA_VERSION`, Node
+   z nazwy (`nodejs22`). Wynik parowania:
+   - `python` 7/7 i `base`/`static`/`cc` 18/18 mają partnera;
+   - `node` 13/16 — bez partnera tylko `nodejs-debian9/10/11` (brak wersji w nazwie);
+   - `java` 3/14 — partnera mają tylko `java11-debian10/11` i `java17-debian11`.
+     **To ograniczenie danych, nie kodu:** `library/openjdk` ma stabilne tagi Javy 17 tylko
+     do `debian11`, a dla 21 i 25 wyłącznie buildy EA (wykluczone). Distroless Java 17+ na
+     `debian12`/`debian13` nie ma oficjalnego partnera na Debianie (`eclipse-temurin` stoi na
+     Ubuntu). Do opisania w rozdz. 6.
+
+   Zapas 5% na drugi stopień deduplikacji nie jest jeszcze losowany — dojdzie razem
+   z `Matrix.py layers`.
 3. **`Matrix.py layers`** (sieć): `GET mirror.gcr.io/v2/<repo>/manifests/<arch_digest>`,
    `layer_key = sha256(lista digestów warstw)`; distroless z `gcr.io`. **Nie z Docker Huba** —
    `GET` manifestu liczy się tam do limitu 200 / 6 h. Przy chybieniu na lustrze
