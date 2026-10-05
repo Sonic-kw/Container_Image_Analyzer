@@ -1,11 +1,12 @@
-# Dokumentacja kodu fetchera (Kroki 1–4)
+# Dokumentacja kodu fetchera (Kroki 1–5)
 
 Dokument opisuje **istniejący kod** w `src/` — co robi każdy krok, w jakiej kolejności, jakie
 pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia metodologiczne
 (dlaczego cztery klasy, dlaczego tylko `latest` z distroless, skąd próg 10 tys.) są w
 [`PLAN.md`](PLAN.md); tutaj pojawiają się tylko tam, gdzie tłumaczą konkretną linię kodu.
 
-Kroki 5 (matryca) i 6 (skaner Trivy) nie mają jeszcze kodu.
+Krok 5 (matryca) ma na razie polecenie `select`; `layers` i Krok 6 (skaner Trivy) nie mają
+jeszcze kodu.
 
 ## Spis treści
 
@@ -18,9 +19,10 @@ Kroki 5 (matryca) i 6 (skaner Trivy) nie mają jeszcze kodu.
 7. [Krok 4A — `Classify.py classify`: klasa i linia systemu](#7-krok-4a--classifypy-classify-klasa-i-linia-systemu)
 8. [Krok 4B — `Classify.py assign`: ścieżka pobrania](#8-krok-4b--classifypy-assign-ścieżka-pobrania)
 9. [Krok 4C — `Classify.py probe-tags`: sonda lustra](#9-krok-4c--classifypy-probe-tags-sonda-lustra)
-10. [Formaty plików](#10-formaty-plików)
-11. [Cache i wznawianie](#11-cache-i-wznawianie)
-12. [Zachowania brzegowe i ograniczenia](#12-zachowania-brzegowe-i-ograniczenia)
+10. [Krok 5A — `Matrix.py select`: matryca](#10-krok-5a--matrixpy-select-matryca)
+11. [Formaty plików](#11-formaty-plików)
+12. [Cache i wznawianie](#12-cache-i-wznawianie)
+13. [Zachowania brzegowe i ograniczenia](#13-zachowania-brzegowe-i-ograniczenia)
 
 ---
 
@@ -42,8 +44,9 @@ flowchart TD
   k4a --> cls["results/classified.jsonl"]
   cls --> k4b["Krok 4B: Classify.py assign"]
   k4b --> refs["results/refs.jsonl"]
-  refs --> k5["Krok 5: matryca (brak kodu)"]
-  k5 --> k4c["Krok 4C: Classify.py probe-tags"]
+  refs --> k5["Krok 5A: Matrix.py select"]
+  k5 --> matrix["results/matrix.jsonl"]
+  matrix --> k4c["Krok 4C: Classify.py probe-tags"]
   k4c --> probed["matryca z mirror_probe"]
 ```
 
@@ -56,6 +59,7 @@ flowchart TD
 | `src/Classify.py` | `classify` | pliki tagów + `gcr_catalog.jsonl` | `results/classified.jsonl` | **brak** |
 | `src/Classify.py` | `assign` | `classified.jsonl` | `results/refs.jsonl` | `gcr.io` |
 | `src/Classify.py` | `probe-tags` | matryca | matryca z wynikiem sondy | `mirror.gcr.io` |
+| `src/Matrix.py` | `select` | `refs.jsonl` | `results/matrix.jsonl`, `results/matrix_report.json` | **brak** |
 
 Moduły importują się nawzajem po nazwie (`from hub_http import ...`), więc skrypty uruchamia się
 jako `python src/<Plik>.py` z katalogu głównego repozytorium — Python dodaje wtedy `src/` do
@@ -66,7 +70,20 @@ bieżącego katalogu.
 
 **Zależności** (`requirements.txt`): `requests`, `requests_cache`, `python-dotenv`.
 `requests_cache` jest opcjonalny:
-bez niego kod działa, tylko bez cache HTTP (patrz [rozdział 11](#11-cache-i-wznawianie)).
+bez niego kod działa, tylko bez cache HTTP (patrz [rozdział 12](#12-cache-i-wznawianie)).
+
+**Środowisko `.venv` na Linuksie.** Terminal otwarty w Cursorze (AppImage) dziedziczy zmienne
+środowiskowe AppImage, przez które `python3 -m venv` tworzy dowiązania do
+`/opt/cursor.appimage` zamiast do Pythona — takie `.venv` nie działa. Środowisko tworzy się
+więc w czystym środowisku:
+
+```bash
+rm -rf .venv
+env -i HOME=$HOME PATH=/usr/bin:/bin /usr/bin/python3 -m venv .venv
+env -i HOME=$HOME PATH=/usr/bin:/bin .venv/bin/python -m pip install -r requirements.txt
+```
+
+Uruchamianie skryptów (`.venv/bin/python src/...`) działa potem normalnie.
 
 **Sekrety.** Plik `.env` w katalogu głównym (wzór: `.env.example`):
 
@@ -87,7 +104,8 @@ python src/GetTags.py --source library --out results/tags_library.jsonl         
 python src/GetTags.py --source search --min-pulls 10000 --out results/tags_search.jsonl
 python src/Classify.py classify --tags results/tags_library.jsonl results/tags_search.jsonl
 python src/Classify.py assign
-# po Kroku 5, na gotowej matrycy:
+python src/Matrix.py select                                 # Krok 5
+# na gotowej matrycy:
 python src/Classify.py probe-tags --in results/matrix.jsonl --out results/matrix_probed.jsonl
 ```
 
@@ -447,7 +465,7 @@ python src/Classify.py assign [--in results/classified.jsonl] [--out results/ref
 ```
 
 Sesja **bez cache HTTP i bez tokenu Huba** (wspólna dla `assign` i `probe-tags`, patrz
-[rozdział 11](#11-cache-i-wznawianie)).
+[rozdział 12](#12-cache-i-wznawianie)).
 
 ### Przebieg `assign`
 
@@ -515,7 +533,67 @@ Test 29.09.2026 na 15 wierszach: 8 `hit`, 6 `miss` (stare tagi, np. `python:2.7.
 `mysql:5.7.18`, `redis:2.8.18` — brak potwierdzony ponowną sondą kilka minut później),
 distroless przepuszczony.
 
-## 10. Formaty plików
+## 10. Krok 5A — `Matrix.py select`: matryca
+
+**Cel:** z ~335 tys. wierszy `refs.jsonl` wybrać ok. 10 tys. obrazów ułożonych w grupy, w których
+każdą klasę utwardzenia da się porównać z `standard` tej samej technologii i wersji.
+**Offline** — zero zapytań sieciowych.
+
+```bash
+python src/Matrix.py select [--in results/refs.jsonl] [--out results/matrix.jsonl]
+                            [--report results/matrix_report.json]
+                            [--target 10000] [--cap 150] [--seed 2026] [-v]
+```
+
+Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
+
+### Stałe
+
+| Stała | Po co |
+| --- | --- |
+| `PARTNER_REPO` | technologia distroless → repozytorium `library/` partnera: `python` → `library/python`, `node` → `library/node`, `java` → `library/openjdk`, `base` → `library/debian` |
+| `PYTHON_BY_DEBIAN` | wersja Pythona w `python3-debianN`, odczytana z `Entrypoint` w configu obrazu (01.10.2026): `debian9` 3.5 … `debian13` 3.13 |
+
+### Przebieg `select`, w kolejności
+
+1. **Filtr** (`is_candidate`): wiersz `library/` albo distroless, bez `excluded_reason`, bez
+   `prerelease`, z `arch_digest`. Repozytoria z wyszukiwania odpadają tutaj.
+2. **Dedup po obrazie amd64** (`dedup_by_digest`): jeden wiersz na `arch_digest`. Wygrywa tag
+   wyżej oceniony przez `tag_score` — z wersją i z linią OS z samego tagu (dla distroless: ten,
+   którego wersję runtime'u znamy). Tagi pozostałych wierszy trafiają do listy `aliases`.
+3. **Reguła minor** (`keep_newest_per_minor`): dla klucza (repozytorium, wersja `X.Y` z funkcji
+   `minor`, `flavor`, klasa, linia OS) zostaje wiersz z najpóźniejszym `tag_last_pushed`.
+4. **Grupy Hub** (`build_hub_groups`): wiersze z tym samym (repozytorium, `X.Y`, `flavor`) dzielone
+   są według linii OS — każda linia to osobna grupa z obrazami `standard` i `slim`. Najnowszy
+   obraz `alpine` tej wersji dołącza do grupy z najnowszym `standard`; gdy `standard` nie ma,
+   tworzy własną grupę. `group_id` ma postać `library/python:3.13:-:debian13`.
+5. **Parowanie distroless** (`attach_distroless`, `find_partner_group`):
+   - `runtime_version` daje wersję runtime'u z nazwy obrazu: `python3` z `PYTHON_BY_DEBIAN`,
+     `nodejs22` → `22`, `java21` → `21`, `base`/`static`/`cc`/`base-nossl` → numer Debiana.
+     Dla `nodejs-debianN`, `java-debianN` i `java-base-*` wersji nie ma, więc nie ma partnera;
+   - szukana jest grupa repozytorium z `PARTNER_REPO`, której wersja zaczyna się od wersji
+     runtime'u (`version_matches`: `22` pasuje do `22.23`) i której `standard` stoi na tej samej
+     linii Debiana. Spośród pasujących wygrywa grupa bez `flavor`, a potem z najnowszym
+     `standard`;
+   - obraz bez partnera tworzy własną, jednoosobową grupę.
+   Log wypisuje dla każdego obrazu distroless, do której grupy trafił.
+6. **Oznaczenie grup** (`mark_pairs`): `paired` — grupa ma `standard` i co najmniej jedną inną
+   klasę; `triangle` — ma `standard` i distroless.
+7. **Kwoty** (`allocate_quotas`): każde repozytorium ma wagę `log(1 + liczba grup)` i dostępną
+   liczbę obrazów przyciętą do `--cap`. `--target` (pomniejszony o grupy distroless bez
+   partnera) dzielony jest proporcjonalnie do wag; repozytorium, które nie wypełni swojej
+   części, dostaje tyle, ile ma, a reszta jest dzielona od nowa między pozostałe.
+8. **Losowanie** (`pick_groups`, ziarno `--seed`): w każdym repozytorium najpierw wszystkie grupy
+   z distroless, potem grupy sparowane w losowej kolejności, na końcu pozostałe. Grupa wchodzi
+   w całości albo wcale — dopóki mieści się w kwocie.
+9. **Zapis:** wiersze wybranych grup z dopisanymi `group_id`, `paired`, `triangle`; raport
+   (`build_report`) z rozkładem klas, liczbą grup, sparowanych i z distroless, liczbą obrazów
+   na repozytorium i statusem każdego obrazu distroless.
+
+Wynik 01.10.2026 (ziarno 2026): 9 975 obrazów w 7 465 grupach z 233 repozytoriów — 7 101
+`standard`, 2 011 `alpine`, 808 `slim`, 55 `distroless`; 2 305 grup sparowanych, 28 z distroless.
+
+## 11. Formaty plików
 
 Wszystkie wyniki to **JSONL**: jeden obiekt JSON na linię, UTF-8, bez znaków ucieczki dla
 polskich liter (`ensure_ascii=False`). Czyta się je strumieniowo i dopisuje linia po linii.
@@ -578,7 +656,22 @@ Wszystkie pola `classified.jsonl` plus:
 
 Dla wierszy GCR `assign` wypełnia też `digest` i `arch_digest`.
 
-## 11. Cache i wznawianie
+### `results/matrix.jsonl` i `results/matrix_report.json` (Krok 5A)
+
+`matrix.jsonl`: wszystkie pola `refs.jsonl` plus:
+
+| Pole | Opis |
+| --- | --- |
+| `aliases` | pozostałe tagi wskazujące ten sam obraz amd64 |
+| `group_id` | grupa porównawcza, np. `library/python:3.13:-:debian13` |
+| `paired` | grupa ma `standard` i ≥ 1 klasę utwardzoną |
+| `triangle` | grupa ma `standard` i distroless |
+
+Wiersze jednej grupy leżą obok siebie. `matrix_report.json` to podsumowanie przebiegu:
+parametry (`target`, `cap`, `seed`), liczba wierszy i grup, `groups_paired`, `groups_triangle`,
+`variants`, `top_repos` oraz `distroless` (technologia, linia, z partnerem / bez).
+
+## 12. Cache i wznawianie
 
 | Cache | Gdzie | Kto używa | Ważność | Rola |
 | --- | --- | --- | --- | --- |
@@ -601,7 +694,7 @@ Dla wierszy GCR `assign` wypełnia też `digest` i `arch_digest`.
 - `results/` i `cache/` są w `.gitignore` — wszystko da się odtworzyć poleceniami
   z [rozdziału 2](#2-uruchomienie).
 
-## 12. Zachowania brzegowe i ograniczenia
+## 13. Zachowania brzegowe i ograniczenia
 
 - **Kolejność w `classify`.** Każde repozytorium musi być w wejściu ciągłym blokiem i tylko raz.
   Scalanie plików tagów ręcznie (np. `sort`) złamie ten warunek; bezpiecznie jest podawać
@@ -613,8 +706,11 @@ Dla wierszy GCR `assign` wypełnia też `digest` i `arch_digest`.
   wiele obrazów po prostu nie ma jej w tagu, a alias pomaga tylko wtedy, gdy jakiś tag tego
   samego obrazu ją ma. Kod nie zgaduje.
 - **`family` nie jest znormalizowane** dla Huba: `library/node` i `*/nodejs` to różne wartości,
-  a przestrzenie typu `amazon/aws-lambda-python` dają własne nazwy. Normalizacja należy do
-  Kroku 5.
+  a przestrzenie typu `amazon/aws-lambda-python` dają własne nazwy. Krok 5 tego nie potrzebuje:
+  bierze tylko `library/`, a distroless paruje przez jawną tabelę `PARTNER_REPO`.
+- **Parowanie Javy** w `Matrix.py` domyka się tylko dla `java11-debian10/11` i
+  `java17-debian11` — `library/openjdk` nie ma stabilnych tagów nowszych wersji na nowszych
+  liniach Debiana. To cecha danych, nie błąd dopasowania.
 - **Wersja** jest rozpoznawana tylko na pierwszej pozycji tagu; `jdk-21` da `version = None`
   i `flavor = "jdk-21"`.
 - **Sonda** traktuje każdą odpowiedź 4xx inną niż `200` jako brak (po ponowieniu), np. `401`
