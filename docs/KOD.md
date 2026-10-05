@@ -19,7 +19,7 @@ jeszcze kodu.
 7. [Krok 4A — `Classify.py classify`: klasa i linia systemu](#7-krok-4a--classifypy-classify-klasa-i-linia-systemu)
 8. [Krok 4B — `Classify.py assign`: ścieżka pobrania](#8-krok-4b--classifypy-assign-ścieżka-pobrania)
 9. [Krok 4C — `Classify.py probe-tags`: sonda lustra](#9-krok-4c--classifypy-probe-tags-sonda-lustra)
-10. [Krok 5A — `Matrix.py select`: matryca](#10-krok-5a--matrixpy-select-matryca)
+10. [Krok 5A — `Matrix.py candidates` i `select`: matryca](#10-krok-5a--matrixpy-candidates-i-select-matryca)
 11. [Formaty plików](#11-formaty-plików)
 12. [Cache i wznawianie](#12-cache-i-wznawianie)
 13. [Zachowania brzegowe i ograniczenia](#13-zachowania-brzegowe-i-ograniczenia)
@@ -44,10 +44,12 @@ flowchart TD
   k4a --> cls["results/classified.jsonl"]
   cls --> k4b["Krok 4B: Classify.py assign"]
   k4b --> refs["results/refs.jsonl"]
-  refs --> k5["Krok 5A: Matrix.py select"]
-  k5 --> matrix["results/matrix.jsonl"]
-  matrix --> k4c["Krok 4C: Classify.py probe-tags"]
-  k4c --> probed["matryca z mirror_probe"]
+  refs --> k5c["Krok 5A: Matrix.py candidates"]
+  k5c --> cand["results/candidates.jsonl"]
+  cand --> k4c["Krok 4C: Classify.py probe-tags"]
+  k4c --> probed["results/candidates_probed.jsonl"]
+  probed --> k5s["Krok 5A: Matrix.py select"]
+  k5s --> matrix["results/matrix.jsonl"]
 ```
 
 | Plik | Polecenie | Wejście | Wyjście | Sieć |
@@ -58,8 +60,9 @@ flowchart TD
 | `src/GetTags.py` | — | `catalog.jsonl` | `results/tags*.jsonl` | Hub, z tokenem |
 | `src/Classify.py` | `classify` | pliki tagów + `gcr_catalog.jsonl` | `results/classified.jsonl` | **brak** |
 | `src/Classify.py` | `assign` | `classified.jsonl` | `results/refs.jsonl` | `gcr.io` |
-| `src/Classify.py` | `probe-tags` | matryca | matryca z wynikiem sondy | `mirror.gcr.io` |
-| `src/Matrix.py` | `select` | `refs.jsonl` | `results/matrix.jsonl`, `results/matrix_report.json` | **brak** |
+| `src/Classify.py` | `probe-tags` | `candidates.jsonl` | `results/candidates_probed.jsonl` | `mirror.gcr.io` |
+| `src/Matrix.py` | `candidates` | `refs.jsonl` | `results/candidates.jsonl` | **brak** |
+| `src/Matrix.py` | `select` | `candidates_probed.jsonl` | `results/matrix.jsonl`, `results/matrix_report.json` | **brak** |
 
 Moduły importują się nawzajem po nazwie (`from hub_http import ...`), więc skrypty uruchamia się
 jako `python src/<Plik>.py` z katalogu głównego repozytorium — Python dodaje wtedy `src/` do
@@ -104,9 +107,9 @@ python src/GetTags.py --source library --out results/tags_library.jsonl         
 python src/GetTags.py --source search --min-pulls 10000 --out results/tags_search.jsonl
 python src/Classify.py classify --tags results/tags_library.jsonl results/tags_search.jsonl
 python src/Classify.py assign
-python src/Matrix.py select                                 # Krok 5
-# na gotowej matrycy:
-python src/Classify.py probe-tags --in results/matrix.jsonl --out results/matrix_probed.jsonl
+python src/Matrix.py candidates                             # Krok 5
+python src/Classify.py probe-tags --in results/candidates.jsonl --out results/candidates_probed.jsonl
+python src/Matrix.py select
 ```
 
 Każde polecenie przyjmuje `-v` / `--verbose` (logi na poziomie DEBUG, np. każda strona API).
@@ -500,7 +503,10 @@ ostatecznie wybrać ścieżkę: lustro (poza limitem Huba) albo Hub (200 pobrań
 python src/Classify.py probe-tags --in MATRYCA --out WYNIK [--retry-delay 60] [-v]
 ```
 
-Uruchamiana na **gotowej matrycy** z Kroku 5 (ok. 10 tys. wierszy), nie na 270 tys. tagów.
+Uruchamiana na **kandydatach Kroku 5** (`Matrix.py candidates`, ok. 28 tys. wierszy), przed
+losowaniem — nie na 270 tys. tagów. `Matrix.py select` odrzuca potem obrazy z wynikiem `miss`,
+więc nic nie jest pobierane z Docker Huba, a `budget_line` powinno pokazać zero obrazów w
+matrycy, które idą przez Hub.
 
 ### `head_manifest(session, host, repo, reference)`
 
@@ -533,17 +539,24 @@ Test 29.09.2026 na 15 wierszach: 8 `hit`, 6 `miss` (stare tagi, np. `python:2.7.
 `mysql:5.7.18`, `redis:2.8.18` — brak potwierdzony ponowną sondą kilka minut później),
 distroless przepuszczony.
 
-## 10. Krok 5A — `Matrix.py select`: matryca
+## 10. Krok 5A — `Matrix.py candidates` i `select`: matryca
 
 **Cel:** z ~335 tys. wierszy `refs.jsonl` wybrać ok. 10 tys. obrazów ułożonych w grupy, w których
-każdą klasę utwardzenia da się porównać z `standard` tej samej technologii i wersji.
-**Offline** — zero zapytań sieciowych.
+każdą klasę utwardzenia da się porównać z `standard` tej samej technologii i wersji, bez
+pobierania czegokolwiek z Docker Huba. Oba polecenia są **offline**; pomiędzy nimi idzie
+sonda lustra (sieć):
 
 ```bash
-python src/Matrix.py select [--in results/refs.jsonl] [--out results/matrix.jsonl]
-                            [--report results/matrix_report.json]
-                            [--target 10000] [--cap 150] [--seed 2026] [-v]
+python src/Matrix.py candidates [--in results/refs.jsonl] [--out results/candidates.jsonl] [-v]
+python src/Classify.py probe-tags --in results/candidates.jsonl --out results/candidates_probed.jsonl
+python src/Matrix.py select [--in results/candidates_probed.jsonl] [--out results/matrix.jsonl]
+                            [--report results/matrix_report.json] [--target 10000]
+                            [--pair-cap 300] [--desc-cap 150] [--seed 2026] [-v]
 ```
+
+Sonda idzie **przed** losowaniem: gdyby szła po nim, odrzucenie obrazu dostępnego tylko na
+Hubie rozbijałoby wylosowaną parę. Pełna sonda ~28 tys. kandydatów trwa ok. 4 h (zapytania
+po kolei, ok. 0,42 s każde).
 
 Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
 
@@ -554,7 +567,10 @@ Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
 | `PARTNER_REPO` | technologia distroless → repozytorium `library/` partnera: `python` → `library/python`, `node` → `library/node`, `java` → `library/openjdk`, `base` → `library/debian` |
 | `PYTHON_BY_DEBIAN` | wersja Pythona w `python3-debianN`, odczytana z `Entrypoint` w configu obrazu (01.10.2026): `debian9` 3.5 … `debian13` 3.13 |
 
-### Przebieg `select`, w kolejności
+### Przebieg, w kolejności
+
+Kroki 1–3 wykonuje `candidates` (zapis `results/candidates.jsonl`, ok. 28 tys. wierszy),
+kroki 4–10 — `select`.
 
 1. **Filtr** (`is_candidate`): wiersz `library/` albo distroless, bez `excluded_reason`, bez
    `prerelease`, z `arch_digest`. Repozytoria z wyszukiwania odpadają tutaj.
@@ -563,11 +579,14 @@ Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
    którego wersję runtime'u znamy). Tagi pozostałych wierszy trafiają do listy `aliases`.
 3. **Reguła minor** (`keep_newest_per_minor`): dla klucza (repozytorium, wersja `X.Y` z funkcji
    `minor`, `flavor`, klasa, linia OS) zostaje wiersz z najpóźniejszym `tag_last_pushed`.
-4. **Grupy Hub** (`build_hub_groups`): wiersze z tym samym (repozytorium, `X.Y`, `flavor`) dzielone
+4. **Wczytanie wyniku sondy** (`load_probed`): wiersz Huba bez `mirror_probe` kończy program
+   z komunikatem „uruchom najpierw probe-tags”. Wiersze z `registry = hub` (sonda: `miss`) są
+   odrzucane i liczone w logu; distroless przechodzi bez zmian.
+5. **Grupy Hub** (`build_hub_groups`): wiersze z tym samym (repozytorium, `X.Y`, `flavor`) dzielone
    są według linii OS — każda linia to osobna grupa z obrazami `standard` i `slim`. Najnowszy
    obraz `alpine` tej wersji dołącza do grupy z najnowszym `standard`; gdy `standard` nie ma,
    tworzy własną grupę. `group_id` ma postać `library/python:3.13:-:debian13`.
-5. **Parowanie distroless** (`attach_distroless`, `find_partner_group`):
+6. **Parowanie distroless** (`attach_distroless`, `find_partner_group`):
    - `runtime_version` daje wersję runtime'u z nazwy obrazu: `python3` z `PYTHON_BY_DEBIAN`,
      `nodejs22` → `22`, `java21` → `21`, `base`/`static`/`cc`/`base-nossl` → numer Debiana.
      Dla `nodejs-debianN`, `java-debianN` i `java-base-*` wersji nie ma, więc nie ma partnera;
@@ -577,21 +596,25 @@ Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
      `standard`;
    - obraz bez partnera tworzy własną, jednoosobową grupę.
    Log wypisuje dla każdego obrazu distroless, do której grupy trafił.
-6. **Oznaczenie grup** (`mark_pairs`): `paired` — grupa ma `standard` i co najmniej jedną inną
+7. **Oznaczenie grup** (`mark_pairs`): `paired` — grupa ma `standard` i co najmniej jedną inną
    klasę; `triangle` — ma `standard` i distroless.
-7. **Kwoty** (`allocate_quotas`): każde repozytorium ma wagę `log(1 + liczba grup)` i dostępną
-   liczbę obrazów przyciętą do `--cap`. `--target` (pomniejszony o grupy distroless bez
-   partnera) dzielony jest proporcjonalnie do wag; repozytorium, które nie wypełni swojej
-   części, dostaje tyle, ile ma, a reszta jest dzielona od nowa między pozostałe.
-8. **Losowanie** (`pick_groups`, ziarno `--seed`): w każdym repozytorium najpierw wszystkie grupy
-   z distroless, potem grupy sparowane w losowej kolejności, na końcu pozostałe. Grupa wchodzi
-   w całości albo wcale — dopóki mieści się w kwocie.
-9. **Zapis:** wiersze wybranych grup z dopisanymi `group_id`, `paired`, `triangle`; raport
-   (`build_report`) z rozkładem klas, liczbą grup, sparowanych i z distroless, liczbą obrazów
-   na repozytorium i statusem każdego obrazu distroless.
+8. **Warstwa `pairs`:** wszystkie grupy sparowane, w każdym repozytorium losowane przez
+   `pick_groups` (ziarno `--seed`) do `--pair-cap` obrazów. Grupy z distroless wchodzą zawsze,
+   pozostałe w losowej kolejności; grupa wchodzi w całości albo wcale.
+9. **Warstwa `descriptive`:** grupy bez pary dopełniają matrycę do `--target`. Każde
+   repozytorium ma wagę `log(1 + liczba grup)` i dostępną liczbę obrazów przyciętą do
+   `--desc-cap`; `allocate_quotas` dzieli wolne miejsce (target minus warstwa `pairs` minus
+   distroless bez partnera) proporcjonalnie do wag — repozytorium, które nie wypełni swojej
+   części, dostaje tyle, ile ma, a reszta jest dzielona od nowa. Distroless bez partnera
+   wchodzi zawsze. Gdy sama warstwa `pairs` przekracza `--target`, log ostrzega, a warstwa
+   opisowa jest pusta.
+10. **Zapis:** wiersze wybranych grup z dopisanymi `group_id`, `stratum`, `paired`, `triangle`;
+    raport (`build_report`) z liczbą obrazów per warstwa i klasa, liczbą par per klasa
+    i repozytoriów z parą, liczbą obrazów na repozytorium i statusem każdego obrazu distroless.
 
-Wynik 01.10.2026 (ziarno 2026): 9 975 obrazów w 7 465 grupach z 233 repozytoriów — 7 101
-`standard`, 2 011 `alpine`, 808 `slim`, 55 `distroless`; 2 305 grup sparowanych, 28 z distroless.
+Symulacja 05.10.2026 (wszyscy kandydaci oznaczeni jako dostępni na lustrze — górna granica przed
+prawdziwą sondą, ziarno 2026): 9 940 obrazów — warstwa `pairs` 7 404 (1 397 par `slim`,
+2 433 `alpine`, 28 grup z distroless), `descriptive` 2 536.
 
 ## 11. Formaty plików
 
@@ -664,12 +687,14 @@ Dla wierszy GCR `assign` wypełnia też `digest` i `arch_digest`.
 | --- | --- |
 | `aliases` | pozostałe tagi wskazujące ten sam obraz amd64 |
 | `group_id` | grupa porównawcza, np. `library/python:3.13:-:debian13` |
+| `stratum` | `pairs` (porównania) / `descriptive` (tylko opis ekosystemu) |
 | `paired` | grupa ma `standard` i ≥ 1 klasę utwardzoną |
 | `triangle` | grupa ma `standard` i distroless |
 
 Wiersze jednej grupy leżą obok siebie. `matrix_report.json` to podsumowanie przebiegu:
-parametry (`target`, `cap`, `seed`), liczba wierszy i grup, `groups_paired`, `groups_triangle`,
-`variants`, `top_repos` oraz `distroless` (technologia, linia, z partnerem / bez).
+parametry (`target`, `pair_cap`, `desc_cap`, `seed`), liczba wierszy (łącznie i
+`rows_per_stratum`) i grup, `groups_paired`, `groups_triangle`, `pairs` i `repos_with_pair`
+(per klasa), `variants`, `top_repos` oraz `distroless` (technologia, linia, z partnerem / bez).
 
 ## 12. Cache i wznawianie
 
