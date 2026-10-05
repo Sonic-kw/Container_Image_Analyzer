@@ -704,7 +704,10 @@ wersje.
 | `mirror_probe` | `hit` / `cold_miss` / `miss` — wynik sondy z ponowieniem |
 | `nonroot_available` | czy repozytorium oferuje wariant `nonroot` (własność, nie osobny wiersz) |
 | `layer_key` | klucz deduplikacji dla analizy CVE |
-| `paired` | czy `family` ma wariant `standard` + ≥1 klasę utwardzoną (warunek analizy z pkt 7) |
+| `group_id` | grupa: technologia w jednej wersji i na jednej linii OS (`library/python:3.13:-:debian13`) |
+| `aliases` | pozostałe tagi wskazujące ten sam obraz amd64 |
+| `paired` | czy grupa ma `standard` + ≥1 klasę utwardzoną (warunek analizy z pkt 6–7) |
+| `triangle` | czy grupa ma `standard` i distroless |
 
 ### Przepływ danych
 
@@ -725,14 +728,15 @@ flowchart LR
 ### Kwoty i niezależność obserwacji
 
 - N łącznie ≈ 10 000 skanów; 25% dla klas rzadszych to aspiracja, nie twardy wymóg.
-- Najpierw klasy rzadsze (GCR podnosi N distroless z ~50 w stronę setek — **nie** do 2500),
-  reszta `standard`.
-- Nierówny rozkład jest OK. Rozkład klas ma być **policzony, nie wymuszony**.
-- Twardy limit ~150 obrazów na repozytorium plus alokacja proporcjonalna do
-  `log(liczba_tagów)` — bez tego `openjdk` i `node` (26 tys. tagów łącznie) zdominowałyby próbę.
-- Decyzja o tagach (`:latest` vs wszystkie wersje) — jedna reguła, zapisana. Wiele wersji tej
-  samej bazy puchnie N i psuje niezależność obserwacji. Kolumna `family` służy jako czynnik
-  grupujący, co zabezpiecza przed zarzutem, że N=10000 to nie 10 tys. niezależnych obserwacji.
+- Distroless wchodzi w całości (55 obrazów — cała populacja, nie próba), reszta losowana.
+- Nierówny rozkład jest OK. Rozkład klas ma być **policzony, nie wymuszony** — uzasadnienie
+  w [Rozkład klas w matrycy](#rozkład-klas-w-matrycy--jak-to-opisać).
+- Twardy limit 150 obrazów na repozytorium plus alokacja proporcjonalna do
+  `log(liczba grup)` — bez tego `openjdk` i `node` zdominowałyby próbę.
+- Reguła tagów (decyzja Kroku 5): **jeden obraz na wersję minor** (najnowszy patch) dla każdej
+  klasy i linii OS. Wiele wersji patch tej samej bazy puchłoby N i psuło niezależność
+  obserwacji. Repozytorium jest czynnikiem grupującym w analizie, co zabezpiecza przed
+  zarzutem, że N=10000 to nie 10 tys. niezależnych obserwacji.
 
 ### Uczciwy strop dla distroless
 
@@ -750,6 +754,11 @@ Linia `debian12` (również dostępna) podwaja tę liczbę do 24 i daje dodatkow
 nowsza baza Debiana" — przy czym wersja bazy jest wtedy zmienną, więc obserwacje z `debian12`
 i `debian13` nie są niezależne w obrębie tej samej technologii i wymagają traktowania
 technologii jako czynnika grupującego.
+
+**Decyzja Kroku 5 (01.10.2026): wszystkie linie `debian9`–`debian13`.** Daje to 55 unikalnych
+obrazów (56 repozytoriów, dwa wskazują ten sam obraz). Partnera z tą samą wersją runtime'u
+i linią Debiana ma 41 z nich, w 28 grupach i 4 technologiach (`python`, `node`, `openjdk`,
+`debian`) — szczegóły w wynikach `select` Kroku 5.
 
 **To jest najostrzejsze ograniczenie liczebnościowe całej pracy.** Klasy `standard`, `slim`
 i `alpine` mają po kilka tysięcy kandydatów, a `distroless` kilkanaście. Żadne warstwowanie tego
@@ -1112,14 +1121,15 @@ Mapowanie technologii distroless na repozytorium `library/` (jawna tabela w kodz
 | `java*` | `openjdk` | `library/java` jest przestarzałe (220 starych tagów); `eclipse-temurin` i `amazoncorretto` nie mają linii Debiana |
 | `static`, `base*`, `cc` | `debian` | `debian:13` vs `debian:13-slim` vs `base-debian13` |
 
-Ograniczenie do zapisania: `openjdk` jest na Hubie oznaczone jako przestarzałe. Trzeba sprawdzić,
-czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych liniach Debiana.
+Ograniczenie do zapisania: `openjdk` jest na Hubie oznaczone jako przestarzałe i nie ma
+stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sprawdzone
+01.10.2026 — wynik parowania niżej).
 
 #### Rozpisanie — `src/Matrix.py`
 
 1. [x] **Poprawka Kroku 4** (przed wszystkim): `ea` do tokenów prerelease, ponowne `classify`
    (offline) i `assign`.
-2. **`Matrix.py select`** (offline, wejście `results/refs.jsonl`):
+2. [x] **`Matrix.py select`** (offline, wejście `results/refs.jsonl`):
    1. Filtr: `vendor = library` albo `source_registry = gcr`; bez `excluded_reason`;
       bez `prerelease`; niepusty `arch_digest`.
    2. Pierwszy stopień deduplikacji po `arch_digest`. Zostaje jeden tag kanoniczny (ten
@@ -1128,10 +1138,10 @@ czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych 
    3. **Reguła minor:** dla (repozytorium, wersja `X.Y`, `flavor`, klasa, linia OS) zostaje
       tylko ostatnio wypchnięty tag (`tag_last_pushed`). 199 wersji patch `python` sprowadza
       się do 17 linii minor — to główne zabezpieczenie niezależności obserwacji.
-   4. Grupy: `pair_key = (repo_key, minor, flavor)`. `standard` i `slim` muszą mieć tę samą
-      linię OS; `alpine` bierze najnowszą linię alpine w grupie. Distroless dołącza wg tabeli
-      i dopasowania (technologia, wersja, linia Debiana). Grupy bez linii OS wchodzą do
-      matrycy, ale bez distroless.
+   4. Grupy: `group_id = (repo_key, minor, flavor, linia OS)` z obrazami `standard` i `slim`
+      tej samej linii; `alpine` (najnowsza linia alpine) dołącza do grupy z najnowszym
+      `standard` danej wersji. Distroless dołącza wg tabeli i dopasowania (technologia,
+      wersja, linia Debiana). Grupy bez linii OS wchodzą do matrycy, ale bez distroless.
    5. Losowanie **całymi grupami**, nie wierszami — inaczej pary by się rozpadały. Distroless
       wchodzi w całości jako pierwszy; kwoty repozytoriów ∝ `log(liczba grup)`, limit 150.
       Losowanie z ustalonym ziarnem (powtarzalność), ok. 5% zapasu na drugi stopień dedupu.
@@ -1141,9 +1151,9 @@ czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych 
    z 233 repozytoriów: 7 101 `standard`, 2 011 `alpine`, 808 `slim`, 55 `distroless`.
    2 305 grup jest sparowanych (4,8 tys. obrazów), 28 zawiera distroless.
 
-   W implementacji grupa ma dodatkowo **linię OS** w kluczu: `python:3.11` na `bookworm`
-   i na `trixie` to dwie grupy, bo inaczej `python3-debian12` nie miałby partnera. `alpine`
-   dołącza do grupy z najnowszym obrazem `standard` danej wersji.
+   Linia OS jest w kluczu grupy, bo `python:3.11` na `bookworm` i na `trixie` to różne
+   obrazy — bez tego `python3-debian12` nie miałby partnera (pierwsza wersja kodu zachowywała
+   tylko najnowszą linię).
 
    Wersje runtime'u distroless odczytane z configów obrazów: Python z `Entrypoint`
    (`debian9`–`debian13` → 3.5 / 3.7 / 3.9 / 3.11 / 3.13), Java z `JAVA_VERSION`, Node
@@ -1169,7 +1179,10 @@ czy ma tagi stabilne dla wersji odpowiadających `java17/21/25` na właściwych 
    podzbiorów `paired` i `triangle`, distroless per technologia i linia.
 6. **Obowiązkowo `Classify.py probe-tags`** na matrycy; udział ścieżki Hub jako liczba partii
    po 200 / 6 h.
-7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md`.
+7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md` (`select` opisany).
+
+Otwarta decyzja przed `layers`: losowanie w dwóch warstwach — patrz
+[Rozkład klas w matrycy](#rozkład-klas-w-matrycy--jak-to-opisać).
 
 #### Poza zakresem (świadomie)
 
@@ -1232,7 +1245,8 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 
 Repozytorium zawiera `Dockerfile` (środowisko Trivy), `requirements.txt`, dokumentację
 w `docs/` (ten plan i opis kodu [`KOD.md`](KOD.md)) oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
-`GetTags.py` (Krok 3) i `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`). Wyniki
+`GetTags.py` (Krok 3), `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`) i `Matrix.py`
+(Krok 5, na razie `select`). Wyniki
 (`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
 digestów. PoC `scanner.py` został usunięty (commit `57ef163`); jego błędy są spisane jako
 [wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6), a implementacja idzie od
