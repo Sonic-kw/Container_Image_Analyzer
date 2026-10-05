@@ -633,11 +633,19 @@ z parą, raportowane osobno per klasa. Zdanie do pracy: *rozkład klas odzwierci
 wariantów w ekosystemie obrazów oficjalnych; porównania metod utwardzania prowadzone są
 wyłącznie na parach w obrębie tej samej technologii i wersji.*
 
-**Otwarte (Krok 5):** obecne losowanie bierze tylko 783 z 3 392 dostępnych par `slim`, bo limit
-150 tnie repozytoria z największą liczbą par (`python`, `node`, `openjdk`), a miejsce zajmują
-grupy z samym `standard`. Propozycja: losowanie w **dwóch warstwach** — grupy sparowane
-z priorytetem i limitem 300 na repozytorium (szacunkowo ok. 1 400 par `slim`, ok. 2 400
-`alpine`, ok. 7,4 tys. obrazów), reszta do 10 tys. z obrazów bez pary na potrzeby punktu 5.
+**Losowanie w dwóch warstwach (decyzja 05.10.2026).** Pierwsza wersja losowania brała tylko
+783 z 3 392 dostępnych par `slim`, bo limit 150 ciął repozytoria z największą liczbą par
+(`python`, `node`, `openjdk`), a miejsce zajmowały grupy z samym `standard`. Matryca ma
+teraz dwie warstwy, zapisane w kolumnie `stratum`:
+
+- **`pairs`** — grupy sparowane, limit **300** obrazów z repozytorium. Do punktów 6–7.
+- **`descriptive`** — grupy bez pary, limit 150, dopełniają matrycę do 10 tys. **Wyłącznie do
+  punktu 5** (opis ekosystemu); nie wchodzą do porównań metod utwardzania.
+
+Symulacja przed sondą lustra (wszystkie obrazy dostępne — górna granica): 7 404 obrazów
+w warstwie `pairs` (1 397 par `slim`, 2 433 `alpine`, 28 grup z distroless) i 2 536
+w `descriptive`. Liczba repozytoriów z parą się nie zmienia (25 `slim`, 73 `alpine`) — to już
+wszystkie repozytoria `library/`, które w ogóle oferują te warianty.
 
 ## Pilotaż weryfikujący metodykę (13.09.2026)
 
@@ -708,6 +716,7 @@ wersje.
 | `aliases` | pozostałe tagi wskazujące ten sam obraz amd64 |
 | `paired` | czy grupa ma `standard` + ≥1 klasę utwardzoną (warunek analizy z pkt 6–7) |
 | `triangle` | czy grupa ma `standard` i distroless |
+| `stratum` | `pairs` (porównania, pkt 6–7) / `descriptive` (opis ekosystemu, tylko pkt 5) |
 
 ### Przepływ danych
 
@@ -715,13 +724,13 @@ wersje.
 flowchart LR
   hub["Docker Hub search plus tagi"] --> classify["4 klasy"]
   gcr["GCR distroless katalog"] --> classify
-  classify --> matrix["logical_ref plus pull_ref"]
-  matrix --> probe["Sonda dostepnosci lustra"]
-  probe -->|"hit / cold_miss"| mirror["Pull przez mirror.gcr.io"]
-  probe -->|"404 po ponowieniu"| hubPull["Pull z Huba, budzet 200 na 6h"]
+  classify --> cand["Kandydaci po regule minor"]
+  cand --> probe["Sonda dostepnosci lustra"]
+  probe -->|"hit / cold_miss"| matrix["Matryca: pairs plus descriptive"]
+  probe -->|"404 po ponowieniu"| dropped["Odrzucony, bez pobierania z Huba"]
+  matrix --> mirror["Pull przez mirror.gcr.io"]
   matrix --> gcrPull["Pull z gcr.io distroless"]
   mirror --> trivy["Trivy wsady"]
-  hubPull --> trivy
   gcrPull --> trivy
 ```
 
@@ -1098,6 +1107,15 @@ grup ma tylko trzy pierwsze wiersze — distroless istnieje dla kilku technologi
    31 544 kandydatów, limit 150 przycina do ~12 100. Do 10 tys. schodzimy alokacją
    proporcjonalną do `log(liczba grup)` w repozytorium. Końcowy N jest liczony, nie wymuszony —
    drugi stopień deduplikacji (`layer_key`) może go jeszcze obniżyć.
+   **Zmienione 05.10.2026:** limit 300 dla grup sparowanych, 150 dla warstwy opisowej — patrz
+   [losowanie w dwóch warstwach](#rozkład-klas-w-matrycy--jak-to-opisać).
+5. **Bez pobierania z Docker Huba (05.10.2026).** Do matrycy wchodzą tylko obrazy, które ma
+   lustro `mirror.gcr.io` (oraz distroless z `gcr.io`). Sonda lustra idzie więc **przed**
+   losowaniem, na kandydatach po regule minor (~28 tys.), a nie na gotowej matrycy — inaczej
+   wylosowane pary rozpadałyby się po odrzuceniu brakującego obrazu. Ścieżka Hub i budżet
+   200 / 6 h znikają z kampanii. Ograniczenie do opisania: odpadają głównie stare tagi,
+   których lustro nie przechowuje (próba 300 obrazów: 14% `miss`), więc próba jest lekko
+   przesunięta w stronę nowszych obrazów.
 
 #### Dlaczego distroless tylko z Debianem i tylko po wersji
 
@@ -1129,7 +1147,8 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
 
 1. [x] **Poprawka Kroku 4** (przed wszystkim): `ea` do tokenów prerelease, ponowne `classify`
    (offline) i `assign`.
-2. [x] **`Matrix.py select`** (offline, wejście `results/refs.jsonl`):
+2. [x] **`Matrix.py select`** — od 05.10.2026 podzielony na `candidates` (punkty 1–3 poniżej,
+   wejście `results/refs.jsonl`) i `select` (punkty 4–5, wejście: kandydaci po sondzie):
    1. Filtr: `vendor = library` albo `source_registry = gcr`; bez `excluded_reason`;
       bez `prerelease`; niepusty `arch_digest`.
    2. Pierwszy stopień deduplikacji po `arch_digest`. Zostaje jeden tag kanoniczny (ten
@@ -1177,12 +1196,19 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
    `triangle`: grupa z distroless.
 5. **Raport** `results/matrix_report.json` + log: rozkład klas, liczba grup, liczebność
    podzbiorów `paired` i `triangle`, distroless per technologia i linia.
-6. **Obowiązkowo `Classify.py probe-tags`** na matrycy; udział ścieżki Hub jako liczba partii
-   po 200 / 6 h.
-7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md` (`select` opisany).
+6. **`Classify.py probe-tags` na kandydatach, przed `select`** (decyzja 5). Pełna sonda
+   ~28 tys. obrazów trwa ok. 4 h (0,42 s na zapytanie, po kolei) — **jeszcze nieuruchomiona**.
+   Kolejność:
 
-Otwarta decyzja przed `layers`: losowanie w dwóch warstwach — patrz
-[Rozkład klas w matrycy](#rozkład-klas-w-matrycy--jak-to-opisać).
+   ```bash
+   python src/Matrix.py candidates
+   python src/Classify.py probe-tags --in results/candidates.jsonl --out results/candidates_probed.jsonl
+   python src/Matrix.py select
+   ```
+7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md`.
+
+Obecny `results/matrix.jsonl` pochodzi z pierwszej wersji `select` (jedna warstwa, limit 150,
+bez sondy) i jest nieaktualny do czasu przebiegu powyżej.
 
 #### Poza zakresem (świadomie)
 
@@ -1196,9 +1222,9 @@ Otwarta decyzja przed `layers`: losowanie w dwóch warstwach — patrz
 
 - Matryca zawiera kolumny z sekcji [Schemat matrycy testowej](#schemat-matrycy-testowej).
 - Dwa kanały discovery: Hub + GCR distroless — **oba obowiązkowe**.
-- Pull oficjalnych przez lustro tam, gdzie sonda potwierdziła dostępność; udział fallbacku na
-  Hub policzony i zaraportowany.
-- Trivy w partiach < 200 / 6 h na ścieżce Hub; ścieżki GCR i lustra liczone osobno.
+- Pull oficjalnych wyłącznie przez lustro (sonda przed losowaniem); liczba odrzuconych
+  obrazów dostępnych tylko na Hubie policzona i zaraportowana. Ścieżki Hub w kampanii nie ma
+  (decyzja 05.10.2026), więc limit 200 / 6 h nie dotyczy skanów.
 - Rozkład klas policzony, nie wymuszony.
 - Deduplikacja po `layer_key`, nie po digescie manifestu.
 
