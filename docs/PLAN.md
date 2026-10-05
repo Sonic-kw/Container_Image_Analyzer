@@ -1210,6 +1210,42 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
 Obecny `results/matrix.jsonl` pochodzi z pierwszej wersji `select` (jedna warstwa, limit 150,
 bez sondy) i jest nieaktualny do czasu przebiegu powyżej.
 
+#### Wznowienie pracy na innym komputerze (stan 05.10.2026)
+
+Ostatni zrobiony krok: `Matrix.py candidates` → `results/candidates.jsonl` (27 916 wierszy).
+Następny: pełna sonda, potem `select`, potem `Matrix.py layers` (punkt 3 wyżej).
+
+1. **Dane.** `results/` i `cache/` nie są w gicie (`.gitignore`). Obie drogi są poprawne,
+   warunek: wszystkie pliki z **jednego** przebiegu (nie mieszać starych i nowych), a w pracy
+   podana data zebrania danych.
+   - **Kopia** z poprzedniego komputera: minimum `results/candidates.jsonl` (23 MB), zalecany
+     cały `results/` (~650 MB). Liczby w tym planie i w `KOD.md` zostają aktualne.
+   - **Nowy przebieg** Kroków 1–4 i `candidates` (pełny przebieg w `KOD.md`, rozdział 2;
+     potrzebny `.env` z PAT, kilka godzin zapytań do Huba): świeższe tagi, bliżej daty skanu
+     i prawdopodobnie mniej `miss` w sondzie. Zbiór będzie inny, więc liczby z Kroków 1–4
+     i symulacji `select` w tym planie i w `KOD.md` trzeba podmienić.
+2. **Środowisko:** `.venv` tworzy się od nowa według `KOD.md` → rozdział 2 „Uruchomienie”
+   (na Linuksie z terminala Cursora przez `env -i`, bo AppImage psuje `python3 -m venv`).
+   `.env` z PAT (wzór `.env.example`) potrzebny tylko Krokom 1–4 — `candidates`, sonda i `select` z niego nie
+   korzystają (sonda pyta anonimowo `mirror.gcr.io`, `candidates`/`select` są offline).
+3. **Sonda (~4 h, sieć):** zapytania idą po kolei, a wynik zapisywany jest dopiero na końcu —
+   przerwanie oznacza start od zera. Uruchamiać w tle, z logiem:
+
+   ```bash
+   nohup .venv/bin/python src/Classify.py probe-tags --in results/candidates.jsonl \
+       --out results/candidates_probed.jsonl > results/probe.log 2>&1 &
+   tail -f results/probe.log        # postęp co 500 obrazów
+   ```
+4. **Losowanie (offline, sekundy):** `.venv/bin/python src/Matrix.py select -v`.
+   Sprawdzić w logu liczbę odrzuconych obrazów tylko z Huba (próba 300: ok. 14% `miss`)
+   i w `results/matrix_report.json` liczbę par per klasa; porównać z symulacją powyżej
+   (górna granica: 9 940 obrazów, 1 397 par slim, 2 433 alpine, 28 grup z distroless).
+   Wyniki dopisać tutaj i w `KOD.md` (rozdział 10).
+
+Zasady pracy: kod prosty, na poziomie studenta 3. roku, bez sztuczek; osobny commit na każdą
+zmianę; bez trailera `Co-authored-by: Cursor` w commitach (w razie potrzeby usuwany
+`git filter-branch --msg-filter` przed pushem); push tylko na prośbę; dokumentacja po polsku.
+
 #### Poza zakresem (świadomie)
 
 - **`no_amd64`** (40 945) — głównie przestrzenie per architektura i `chainguard` (7 115).
@@ -1272,7 +1308,7 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 Repozytorium zawiera `Dockerfile` (środowisko Trivy), `requirements.txt`, dokumentację
 w `docs/` (ten plan i opis kodu [`KOD.md`](KOD.md)) oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
 `GetTags.py` (Krok 3), `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`) i `Matrix.py`
-(Krok 5, na razie `select`). Wyniki
+(Krok 5: `candidates`, `select`). Wyniki
 (`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
 digestów. PoC `scanner.py` został usunięty (commit `57ef163`); jego błędy są spisane jako
 [wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6), a implementacja idzie od
