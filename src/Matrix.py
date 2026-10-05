@@ -1,12 +1,18 @@
 """Krok 5 - matryca testowa.
 
-select (offline): results/refs.jsonl z Kroku 4 -> results/matrix.jsonl
+candidates (offline): results/refs.jsonl z Kroku 4 -> results/candidates.jsonl
   1. filtr: library/ + distroless, bez wykluczen i prerelease, z obrazem amd64
   2. jeden wiersz na obraz amd64 (arch_digest), pozostale tagi trafiaja do aliases
   3. regula minor: najnowszy tag dla (repo, wersja X.Y, flavor, klasa, linia OS)
-  4. grupy (repo, wersja X.Y, flavor): standard + slim + alpine, do tego distroless,
-     jesli zgadza sie technologia, wersja runtime'u i linia Debiana
-  5. losowanie calymi grupami, kwota repozytorium proporcjonalna do log(liczba grup)
+
+Potem Classify.py probe-tags na kandydatach. Do matrycy wchodza tylko obrazy, ktore ma
+lustro mirror.gcr.io (albo distroless z gcr.io), wiec zaden nie jest pobierany z Docker Huba.
+
+select (offline): kandydaci po sondzie -> results/matrix.jsonl
+  4. grupy (repo, wersja X.Y, flavor, linia OS): standard + slim (+ alpine), do tego
+     distroless, jesli zgadza sie technologia, wersja runtime'u i linia Debiana
+  5. dwie warstwy: "pairs" - grupy sparowane, z limitem na repozytorium;
+     "descriptive" - grupy bez pary, dopelniaja matryce do --target (tylko punkt 5 pracy)
 """
 
 from __future__ import annotations
@@ -268,18 +274,14 @@ def allocate_quotas(available: dict[str, int], weights: dict[str, float], target
 
 
 def pick_groups(groups: list[dict], quota: int, rng: random.Random) -> list[dict]:
-    """Najpierw grupy z distroless (zawsze), potem sparowane, potem reszta - losowo."""
+    """Grupy z distroless zawsze, pozostale w losowej kolejnosci, dopoki mieszcza sie w kwocie."""
     mandatory = []
-    paired = []
     rest = []
     for group in groups:
         if has_distroless(group):
             mandatory.append(group)
-        elif group["paired"]:
-            paired.append(group)
         else:
             rest.append(group)
-    rng.shuffle(paired)
     rng.shuffle(rest)
 
     chosen = []
@@ -287,14 +289,35 @@ def pick_groups(groups: list[dict], quota: int, rng: random.Random) -> list[dict
     for group in mandatory:
         chosen.append(group)
         used += len(group["rows"])
-    for group in paired + rest:
+    for group in rest:
         if used + len(group["rows"]) <= quota:
             chosen.append(group)
             used += len(group["rows"])
     return chosen
 
 
-def select(in_path: Path, out_path: Path, target: int, cap: int, seed: int) -> dict:
+def count_rows(groups: list[dict]) -> int:
+    total = 0
+    for group in groups:
+        total += len(group["rows"])
+    return total
+
+
+def group_by_repo(groups: list[dict]) -> dict[str, list[dict]]:
+    by_repo: dict[str, list[dict]] = {}
+    for group in groups:
+        by_repo.setdefault(group["repo_key"], []).append(group)
+    return by_repo
+
+
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def candidates(in_path: Path, out_path: Path) -> int:
     rows = []
     for row in read_jsonl([in_path]):
         if is_candidate(row):
@@ -307,6 +330,28 @@ def select(in_path: Path, out_path: Path, target: int, cap: int, seed: int) -> d
     rows = keep_newest_per_minor(rows)
     log.info("po regule minor: %d", len(rows))
 
+    write_jsonl(out_path, rows)
+    return len(rows)
+
+
+def load_probed(in_path: Path) -> list[dict]:
+    """Kandydaci po sondzie lustra; obrazy dostepne tylko na Docker Hubie odpadaja."""
+    rows = []
+    hub_only = 0
+    for row in read_jsonl([in_path]):
+        if row["source_registry"] == "hub" and row.get("mirror_probe") is None:
+            raise SystemExit(f"{in_path}: brak wyniku sondy - uruchom najpierw Classify.py probe-tags")
+        if row["registry"] == "hub":
+            hub_only += 1
+            continue
+        rows.append(row)
+    log.info("na lustrze lub w gcr.io: %d, tylko na Docker Hubie (odrzucone): %d", len(rows), hub_only)
+    return rows
+
+
+def select(in_path: Path, out_path: Path, target: int, pair_cap: int, desc_cap: int,
+           seed: int) -> dict:
+    rows = load_probed(in_path)
     hub_rows = [r for r in rows if r["source_registry"] == "hub"]
     distroless = [r for r in rows if r["source_registry"] == "gcr"]
     groups = build_hub_groups(hub_rows)
@@ -317,58 +362,87 @@ def select(in_path: Path, out_path: Path, target: int, cap: int, seed: int) -> d
     for group in groups + alone:
         mark_pairs(group)
 
-    groups_by_repo: dict[str, list[dict]] = {}
-    for group in groups:
-        groups_by_repo.setdefault(group["repo_key"], []).append(group)
+    rng = random.Random(seed)
 
+    # Warstwa "pairs": grupy sparowane, do pair_cap obrazow z repozytorium.
+    paired_by_repo = group_by_repo([g for g in groups if g["paired"]])
+    pairs = []
+    for repo in sorted(paired_by_repo):
+        pairs += pick_groups(paired_by_repo[repo], pair_cap, rng)
+    for group in pairs:
+        group["stratum"] = "pairs"
+    log.info("warstwa pairs: %d obrazow w %d grupach", count_rows(pairs), len(pairs))
+
+    # Warstwa "descriptive": grupy bez pary dopelniaja matryce do target.
+    # Distroless bez partnera wchodzi zawsze - cala klasa jest skanowana.
+    other_by_repo = group_by_repo([g for g in groups if not g["paired"]])
     available = {}
     weights = {}
-    for repo, repo_groups in groups_by_repo.items():
-        size = 0
-        for group in repo_groups:
-            size += len(group["rows"])
-        available[repo] = min(size, cap)
+    for repo, repo_groups in other_by_repo.items():
+        available[repo] = min(count_rows(repo_groups), desc_cap)
         weights[repo] = math.log(1 + len(repo_groups))
-    quotas = allocate_quotas(available, weights, target - len(alone))
+    free = target - count_rows(pairs) - count_rows(alone)
+    if free < 0:
+        log.warning("warstwa pairs przekracza --target o %d obrazow", -free)
+        free = 0
+    quotas = allocate_quotas(available, weights, free)
 
-    rng = random.Random(seed)
-    chosen = list(alone)
-    for repo in sorted(groups_by_repo):
-        chosen += pick_groups(groups_by_repo[repo], quotas[repo], rng)
+    descriptive = list(alone)
+    for repo in sorted(other_by_repo):
+        descriptive += pick_groups(other_by_repo[repo], quotas[repo], rng)
+    for group in descriptive:
+        group["stratum"] = "descriptive"
+    log.info("warstwa descriptive: %d obrazow w %d grupach", count_rows(descriptive), len(descriptive))
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as handle:
-        for group in chosen:
-            for row in group["rows"]:
-                row["group_id"] = group["group_id"]
-                row["paired"] = group["paired"]
-                row["triangle"] = group["triangle"]
-                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    chosen = pairs + descriptive
+    out_rows = []
+    for group in chosen:
+        for row in group["rows"]:
+            row["group_id"] = group["group_id"]
+            row["stratum"] = group["stratum"]
+            row["paired"] = group["paired"]
+            row["triangle"] = group["triangle"]
+            out_rows.append(row)
+    write_jsonl(out_path, out_rows)
 
-    return build_report(chosen, target, cap, seed)
+    params = {"target": target, "pair_cap": pair_cap, "desc_cap": desc_cap, "seed": seed}
+    return build_report(chosen, params)
 
 
-def build_report(chosen: list[dict], target: int, cap: int, seed: int) -> dict:
+def build_report(chosen: list[dict], params: dict) -> dict:
     variants: Counter[str] = Counter()
+    per_stratum: Counter[str] = Counter()
     per_repo: Counter[str] = Counter()
+    pairs: Counter[str] = Counter()
+    repos_with_pair: dict[str, set] = {"slim": set(), "alpine": set(), "distroless": set()}
     distroless_lines: Counter[str] = Counter()
     rows = 0
     for group in chosen:
+        group_variants = set()
         for row in group["rows"]:
             rows += 1
             variants[row["variant"]] += 1
+            per_stratum[group["stratum"]] += 1
             per_repo[row["repo_key"]] += 1
+            group_variants.add(row["variant"])
             if row["variant"] == "distroless":
                 status = "z partnerem" if group["triangle"] else "bez partnera"
                 distroless_lines[f"{row['family']} {row['os_line']} {status}"] += 1
+        if "standard" in group_variants:
+            for variant in ("slim", "alpine", "distroless"):
+                if variant in group_variants:
+                    pairs[variant] += 1
+                    repos_with_pair[variant].add(group["repo_key"])
 
     return {
-        "params": {"target": target, "cap": cap, "seed": seed},
+        "params": params,
         "rows": rows,
+        "rows_per_stratum": dict(per_stratum),
         "groups": len(chosen),
         "groups_paired": sum(1 for g in chosen if g["paired"]),
         "groups_triangle": sum(1 for g in chosen if g["triangle"]),
-        "rows_in_paired_groups": sum(len(g["rows"]) for g in chosen if g["paired"]),
+        "pairs": dict(pairs),
+        "repos_with_pair": {v: len(repos) for v, repos in repos_with_pair.items()},
         "variants": dict(variants),
         "repos": len(per_repo),
         "top_repos": per_repo.most_common(15),
@@ -380,12 +454,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Krok 5 - matryca testowa")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sel = sub.add_parser("select", help="filtr, dedup, grupy i losowanie (offline)")
-    sel.add_argument("--in", dest="in_path", type=Path, default=Path("results/refs.jsonl"))
+    cand = sub.add_parser("candidates", help="filtr, dedup i regula minor (offline)")
+    cand.add_argument("--in", dest="in_path", type=Path, default=Path("results/refs.jsonl"))
+    cand.add_argument("--out", type=Path, default=Path("results/candidates.jsonl"))
+    cand.add_argument("--verbose", "-v", action="store_true")
+
+    sel = sub.add_parser("select", help="grupy i losowanie w dwoch warstwach (offline)")
+    sel.add_argument("--in", dest="in_path", type=Path,
+                     default=Path("results/candidates_probed.jsonl"),
+                     help="kandydaci po Classify.py probe-tags")
     sel.add_argument("--out", type=Path, default=Path("results/matrix.jsonl"))
     sel.add_argument("--report", type=Path, default=Path("results/matrix_report.json"))
     sel.add_argument("--target", type=int, default=10000, help="docelowa liczba obrazow")
-    sel.add_argument("--cap", type=int, default=150, help="limit obrazow na repozytorium")
+    sel.add_argument("--pair-cap", type=int, default=300,
+                     help="limit obrazow z repozytorium w warstwie pairs")
+    sel.add_argument("--desc-cap", type=int, default=150,
+                     help="limit obrazow z repozytorium w warstwie descriptive")
     sel.add_argument("--seed", type=int, default=2026, help="ziarno losowania (powtarzalnosc)")
     sel.add_argument("--verbose", "-v", action="store_true")
 
@@ -396,11 +480,15 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    if args.command == "select":
-        report = select(args.in_path, args.out, args.target, args.cap, args.seed)
+    if args.command == "candidates":
+        candidates(args.in_path, args.out)
+        log.info("gotowe -> %s (teraz Classify.py probe-tags)", args.out)
+    elif args.command == "select":
+        report = select(args.in_path, args.out, args.target, args.pair_cap, args.desc_cap,
+                        args.seed)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        log.info("wierszy: %d, grup: %d (sparowanych %d, z distroless %d)",
-                 report["rows"], report["groups"], report["groups_paired"], report["groups_triangle"])
+        log.info("wierszy: %d %s", report["rows"], report["rows_per_stratum"])
+        log.info("pary: %s, repozytoriow z para: %s", report["pairs"], report["repos_with_pair"])
         log.info("klasy: %s", report["variants"])
         log.info("gotowe -> %s, raport -> %s", args.out, args.report)
 
