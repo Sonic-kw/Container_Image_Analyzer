@@ -466,8 +466,9 @@ def main() -> None:
     sel.add_argument("--out", type=Path, default=Path("results/matrix.jsonl"))
     sel.add_argument("--report", type=Path, default=Path("results/matrix_report.json"))
     sel.add_argument("--target", type=int, default=10000, help="docelowa liczba obrazow")
-    sel.add_argument("--pair-cap", type=int, default=300,
-                     help="limit obrazow z repozytorium w warstwie pairs")
+    sel.add_argument("--pair-cap", type=int, default=99999,
+                     help="limit obrazow z repozytorium w warstwie pairs "
+                          "(domyslnie bez praktycznego limitu - cala pula par z lustra)")
     sel.add_argument("--desc-cap", type=int, default=150,
                      help="limit obrazow z repozytorium w warstwie descriptive")
     sel.add_argument("--seed", type=int, default=2026, help="ziarno losowania (powtarzalnosc)")
