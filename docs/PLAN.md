@@ -605,10 +605,62 @@ Tu wchodzą też obrazy bez pary — dają obraz całego ekosystemu oficjalnych 
   jedno repozytorium = jedna obserwacja. Wynik na wszystkich parach raportujemy pomocniczo.
 - **Porównanie metod między sobą:** **test Friedmana** na grupach z kompletem wariantów
   (pomiary powtarzane, bez założenia normalności) — np. czy `alpine` redukuje CVE bardziej
-  niż `slim`.
-- **Distroless jako studium przypadku.** Ok. 41 obrazów w 28 grupach i tylko 4 technologiach
-  to za mało na mocne wnioskowanie. Tabela par z deltami per technologia i linia Debiana,
-  bez przedstawiania tego jako reprezentatywnej próby.
+  niż `slim`. Główny kontrast metod to grupy `alpine`+`slim`+`standard` (bez wymogu
+  distroless). Pełny czworokąt z distroless jest za rzadki na filar wnioskowania — patrz
+  [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
+- **Distroless jako studium przypadku.** Po przebiegu 06.10.2026: **27 par** w 4 technologiach
+  (`python`, `node`, `openjdk`, `debian`) — za mało na mocne uogólnienie. Tabela delt per
+  technologia i linia Debiana, bez przedstawiania tego jako reprezentatywnej próby ekosystemu.
+
+### Niepełne grupy — jak analizować w inżynierce
+
+Ustalenie 06.10.2026 po matrycy z lustra. **Analiza nie wymaga pełnego układu czterech klas
+w każdej grupie.** `standard` jest w grupie **raz** (jeden skan); delty `slim`/`alpine`/
+`distroless` liczą się względem tego samego baseline. Nie buduje się osobnych par
+„utwardzony vs utwardzony” (np. `distroless`–`alpine`) jako jednostki losowania ani skanu.
+
+**Rozkład składu grup (matryca 06.10.2026, 7 016 grup):**
+
+| Skład grupy | Liczba | Rola w analizie |
+| --- | --- | --- |
+| sam `standard` | 3 797 | tylko punkt 5 (opis ekosystemu) |
+| `slim`+`standard` | 1 209 | Wilcoxon slim |
+| `alpine`+`standard` | 1 034 | Wilcoxon alpine |
+| `alpine`+`slim`+`standard` | 294 | Friedman slim vs alpine (główny kontrast metod) |
+| `distroless`+`slim`+`standard` | 18 | studium distroless |
+| pełne 4 klasy | **8** | Friedman z distroless — wynik pomocniczy / ilustracja |
+| sam `alpine` / sam `slim` / sam `distroless` | 470+168+15 | descriptive lub bez pary |
+| `distroless`+`standard` (bez slim/alpine) | 1 | para distroless |
+| `alpine`+`slim` bez `standard` | 2 | descriptive, bez delty |
+
+Wśród 2 564 grup `paired`: brak distroless w 2 537, brak alpine w 1 228, brak slim w 1 035.
+To odzwierciedla podaż wariantów, nie błąd matrycy.
+
+**Mapowanie na punkty APD:**
+
+1. **Punkt 5** — cała matryca (~9,9 tys. obrazów), w tym samotne `standard`. Pełna grupa
+   niepotrzebna.
+2. **Punkt 6 — slim / alpine vs `standard`** — Wilcoxon osobno na parach (1 529 slim,
+   1 336 alpine). Główny wynik: **mediana delt per repozytorium** (21 repo ze `slim`,
+   53 z `alpine`); wynik na wszystkich parach tylko pomocniczo.
+3. **Punkt 6 — slim vs alpine** — Friedman (lub porównanie delt) na **294** grupach
+   z oboma wariantami + `standard`. To filar „która metoda redukuje CVE bardziej”.
+4. **Punkt 6 — distroless** — studium przypadku na 27 parach / 4 technologiach; tabela,
+   nie uogólnienie na ekosystem. Zdanie do ograniczeń: Google nie publikuje distroless
+   dla nginx, postgres, redis itd.
+5. **Punkt 6 — pełne czwórki (8 grup)** — ostrożny wynik pomocniczy przy Friedmanie
+   z udziałem distroless; **nie** filar obrony.
+6. **Punkt 7** — wykres dwóch osi per para względem `standard`; rekomendacje z delt
+   slim/alpine (mocne N) + akapit o distroless i `nonroot` (jakościowo).
+
+**Czego nie robić w pracy:** uśredniać klasy globalnie (paradoks Simpsona); udawać, że
+N=8 czwórek = mocny test czterech metod; mieszać delt distroless z deltami slim w jednym
+„rankingu” bez zastrzeżenia liczebności; skanować `standard` wielokrotnie pod każdą parę.
+
+**Zdanie do rozdz. 2 / ograniczeń:** *Utwardzone warianty nie są standardem ekosystemu;
+pełny trójkąt lub czworokąt zamyka się dla nielicznych technologii. Porównania metod
+prowadzimy na parach względem `standard`; distroless raportujemy osobno jako studium
+przypadku.*
 
 ### Punkt 7 — bezpieczeństwo vs funkcjonalność
 
@@ -622,30 +674,35 @@ Tu wchodzą też obrazy bez pary — dają obraz całego ekosystemu oficjalnych 
 
 ### Rozkład klas w matrycy — jak to opisać
 
-`standard` stanowi ok. 70% obrazów **zarówno w populacji, jak i w matrycy** (po regule minor
-18 010 z 25 877; w matrycy 7 101 z 9 975), więc losowanie niczego nie przekrzywia. Wynika to
-z podaży: na 178 repozytoriów `library/` tylko 91 ma jakikolwiek wariant `slim` lub `alpine`,
-`slim` oferuje 25 repozytoriów, `alpine` 73. To wynik sam w sobie (rozdz. 2 / 6):
-**utwardzone warianty nie są standardem ekosystemu.**
+`standard` stanowi ok. 64% obrazów w matrycy z 06.10.2026 (6 361 z 9 923) — nadal większość,
+bo tak wygląda podaż na Hubie. Wynika to z tego, że na repozytoriach `library/` tylko część
+oferuje `slim` lub `alpine` (`slim` 21 repo z parą, `alpine` 53). To wynik sam w sobie
+(rozdz. 2 / 6): **utwardzone warianty nie są standardem ekosystemu.**
 
 Dla punktów 6–7 udział klasy nie ma znaczenia — liczy się liczba par i liczba repozytoriów
 z parą, raportowane osobno per klasa. Zdanie do pracy: *rozkład klas odzwierciedla podaż
 wariantów w ekosystemie obrazów oficjalnych; porównania metod utwardzania prowadzone są
 wyłącznie na parach w obrębie tej samej technologii i wersji.*
 
-**Losowanie w dwóch warstwach (decyzja 05.10.2026).** Pierwsza wersja losowania brała tylko
-783 z 3 392 dostępnych par `slim`, bo limit 150 ciął repozytoria z największą liczbą par
-(`python`, `node`, `openjdk`), a miejsce zajmowały grupy z samym `standard`. Matryca ma
-teraz dwie warstwy, zapisane w kolumnie `stratum`:
+**Losowanie w dwóch warstwach (decyzja 05.10.2026, korekta `pair_cap` 06.10.2026).** Pierwsza
+wersja losowania brała tylko 783 z 3 392 dostępnych par `slim`, bo limit 150 ciął repozytoria
+z największą liczbą par (`python`, `node`, `openjdk`), a miejsce zajmowały grupy z samym
+`standard`. Matryca ma dwie warstwy, zapisane w kolumnie `stratum`:
 
-- **`pairs`** — grupy sparowane, limit **300** obrazów z repozytorium. Do punktów 6–7.
+- **`pairs`** — grupy sparowane. Limit na repozytorium: najpierw 300 (05.10), potem
+  **bez praktycznego limitu** (`--pair-cap 99999`, domyślnie w `Matrix.py`) — inaczej
+  ~1,9 tys. obrazów w parach zostawało poza matrycą (głównie `library/node` i
+  `library/debian`). Do punktów 6–7. Dominacja `node`/`debian` w N jest OK, bo główny test
+  to mediana delt **per repozytorium**.
 - **`descriptive`** — grupy bez pary, limit 150, dopełniają matrycę do 10 tys. **Wyłącznie do
   punktu 5** (opis ekosystemu); nie wchodzą do porównań metod utwardzania.
 
-Symulacja przed sondą lustra (wszystkie obrazy dostępne — górna granica): 7 404 obrazów
-w warstwie `pairs` (1 397 par `slim`, 2 433 `alpine`, 28 grup z distroless) i 2 536
-w `descriptive`. Liczba repozytoriów z parą się nie zmienia (25 `slim`, 73 `alpine`) — to już
-wszystkie repozytoria `library/`, które w ogóle oferują te warianty.
+**Przebieg 06.10.2026 (po sondzie lustra):** 9 923 obrazów — `pairs` 5 469 (1 529 par `slim`,
+1 336 `alpine`, 27 `distroless`) i `descriptive` 4 454. Klasy: 6 361 `standard`, 1 808
+`alpine`, 1 699 `slim`, 55 `distroless`. Sonda: 9 459 `hit`, 2 206 `cold_miss`, **16 377
+`miss`** (~58% kandydatów tylko na Hubie — odrzucone). Do targetu 10 tys. brakuje 77 obrazów
+(wyczerpana pula `descriptive` pod `desc_cap`). Symulacja sprzed sondy (górna granica przy
+100% lustra) nie obowiązuje — obowiązują liczby po `miss`.
 
 ## Pilotaż weryfikujący metodykę (13.09.2026)
 
@@ -1059,10 +1116,12 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   1 278 `onbuild`, zostaje 271 884 wierszy. Linii OS
   nie da się ustalić dla 40% wierszy `library/` i 82% wierszy z wyszukiwania (tagi bez
   sufiksu systemu, np. `flywheel/python`, `amazon/aws-lambda-*`).
-- [ ] **Krok 5 — matryca 10 tys.** Merge Hub + GCR, dedup po `layer_key`, kwoty miękkie,
-  wyliczenie `paired` względem wariantu `standard` tej samej technologii.
+- [ ] **Krok 5 — matryca ~10 tys.** Merge Hub + GCR, sonda lustra, `select` w dwóch warstwach,
+  wyliczenie `paired`. **Stan 06.10.2026:** `candidates` + `probe-tags` + `select` gotowe
+  (`matrix.jsonl` = 9 923); brakuje `Matrix.py layers` (dedup `layer_key`).
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
   Szczegóły: [Krok 5 — decyzje i rozpisanie](#krok-5--decyzje-i-rozpisanie).
+  Analiza przy niepełnych grupach: [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
 - [ ] **Krok 6 — skaner.** Trivy na `pull_ref` z `--image-src remote`, **baza CVE zamrożona
   przed startem kampanii** (`--download-db-only`, potem `--skip-db-update`), partie poniżej
   limitu, resume gdy JSON raportu istnieje. Szczegóły i uzasadnienie:
@@ -1107,15 +1166,18 @@ grup ma tylko trzy pierwsze wiersze — distroless istnieje dla kilku technologi
    31 544 kandydatów, limit 150 przycina do ~12 100. Do 10 tys. schodzimy alokacją
    proporcjonalną do `log(liczba grup)` w repozytorium. Końcowy N jest liczony, nie wymuszony —
    drugi stopień deduplikacji (`layer_key`) może go jeszcze obniżyć.
-   **Zmienione 05.10.2026:** limit 300 dla grup sparowanych, 150 dla warstwy opisowej — patrz
+   **Zmienione 05.10.2026:** limit 300 dla grup sparowanych, 150 dla warstwy opisowej.
+   **Zmienione 06.10.2026:** `pair_cap` domyślnie bez praktycznego limitu (99999) — cała
+   pula par z lustra; inaczej ~2 tys. par odpadało przez cap na `node`/`debian`. Patrz
    [losowanie w dwóch warstwach](#rozkład-klas-w-matrycy--jak-to-opisać).
 5. **Bez pobierania z Docker Huba (05.10.2026).** Do matrycy wchodzą tylko obrazy, które ma
    lustro `mirror.gcr.io` (oraz distroless z `gcr.io`). Sonda lustra idzie więc **przed**
    losowaniem, na kandydatach po regule minor (~28 tys.), a nie na gotowej matrycy — inaczej
    wylosowane pary rozpadałyby się po odrzuceniu brakującego obrazu. Ścieżka Hub i budżet
    200 / 6 h znikają z kampanii. Ograniczenie do opisania: odpadają głównie stare tagi,
-   których lustro nie przechowuje (próba 300 obrazów: 14% `miss`), więc próba jest lekko
-   przesunięta w stronę nowszych obrazów.
+   których lustro nie przechowuje. Przebieg 06.10.2026: spośród ~28 tys. sondowanych obrazów
+   Hub **58% `miss`** (16 377) — wyraźnie więcej niż wcześniejsza próba 300 z 14%; próba jest
+   przesunięta w stronę nowszych obrazów mocniej niż zakładano.
 
 #### Dlaczego distroless tylko z Debianem i tylko po wersji
 
@@ -1165,10 +1227,18 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
       wchodzi w całości jako pierwszy; kwoty repozytoriów ∝ `log(liczba grup)`, limit 150.
       Losowanie z ustalonym ziarnem (powtarzalność), ok. 5% zapasu na drugi stopień dedupu.
 
-   Zrobione (01.10.2026, ziarno 2026): 136 792 kandydatów → 69 722 po dedupie `arch_digest`
-   → 27 916 po regule minor → 19 129 grup. Wylosowano **9 975 obrazów w 7 465 grupach**
-   z 233 repozytoriów: 7 101 `standard`, 2 011 `alpine`, 808 `slim`, 55 `distroless`.
-   2 305 grup jest sparowanych (4,8 tys. obrazów), 28 zawiera distroless.
+   Zrobione (01.10.2026, ziarno 2026, pierwsza wersja bez sondy): 136 792 kandydatów → 69 722
+   po dedupie `arch_digest` → 27 916 po regule minor → 19 129 grup. Wylosowano **9 975
+   obrazów** — liczby historyczne, zastąpione przebiegiem niżej.
+
+   **Przebieg 06.10.2026** (świeże Kroki 1–4 + sonda + `select --pair-cap 99999`, ziarno 2026):
+   katalog Hub 13 516 repo; tagi library 188 688 + search 148 726; candidates 28 097;
+   po sondzie na lustrze/GCR 11 720 (odrzucone Hub-only 16 377). Matryca: **9 923 obrazów**
+   w 7 016 grupach (214 repo): pairs 5 469 / descriptive 4 454; klasy 6 361 `standard`,
+   1 808 `alpine`, 1 699 `slim`, 55 `distroless`; pary 1 529 `slim` / 1 336 `alpine` /
+   27 `distroless`; repo z parą 21 / 53 / 4; grup z pełnymi 4 klasami **8**; trójkątów
+   `alpine`+`slim`+`standard` 294. Parowanie distroless jak wyżej (partnerzy bez zmian
+   jakościowych względem 01.10). `Matrix.py layers` nadal do zrobienia.
 
    Linia OS jest w kluczu grupy, bo `python:3.11` na `bookworm` i na `trixie` to różne
    obrazy — bez tego `python3-debian12` nie miałby partnera (pierwsza wersja kodu zachowywała
@@ -1197,8 +1267,8 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
 5. **Raport** `results/matrix_report.json` + log: rozkład klas, liczba grup, liczebność
    podzbiorów `paired` i `triangle`, distroless per technologia i linia.
 6. **`Classify.py probe-tags` na kandydatach, przed `select`** (decyzja 5). Pełna sonda
-   ~28 tys. obrazów trwa ok. 4 h (0,42 s na zapytanie, po kolei) — **jeszcze nieuruchomiona**.
-   Kolejność:
+   ~28 tys. obrazów trwa ok. 2–4 h (po kolei; faza ponowień chybień bez logu co 500).
+   **Zrobione 06.10.2026** → `results/candidates_probed.jsonl`. Kolejność:
 
    ```bash
    python src/Matrix.py candidates
@@ -1207,40 +1277,36 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
    ```
 7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md`.
 
-Obecny `results/matrix.jsonl` pochodzi z pierwszej wersji `select` (jedna warstwa, limit 150,
-bez sondy) i jest nieaktualny do czasu przebiegu powyżej.
+Aktualny `results/matrix.jsonl` pochodzi z przebiegu **06.10.2026** (`select` z
+`--pair-cap 99999` po sondzie). `Matrix.py layers` jeszcze nie.
 
-#### Wznowienie pracy na innym komputerze (stan 05.10.2026)
+#### Stan po przebiegu 06.10.2026
 
-Ostatni zrobiony krok: `Matrix.py candidates` → `results/candidates.jsonl` (27 916 wierszy).
-Następny: pełna sonda, potem `select`, potem `Matrix.py layers` (punkt 3 wyżej).
+Ostatni zrobiony krok: `Matrix.py select` → `results/matrix.jsonl` (**9 923** wierszy) +
+`matrix_report.json`. Następny: `Matrix.py layers` (punkt 3 wyżej), potem Krok 6 (skaner).
+
+Dane `results/` i `cache/` nie są w gicie. Pełny przebieg Kroków 1–5A (bez `layers`) jest
+w logach `results/run_*.log` i `results/probe.log`. Na Windowsie: `.venv\Scripts\python.exe`,
+sonda bez `nohup` (Start-Process / sesja w tle). Analiza niepełnych grup:
+[Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
+
+#### Wznowienie pracy na innym komputerze (stan 05.10.2026 — historyczne)
+
+Poniżej procedura z chwili, gdy lokalnie było tylko `candidates.jsonl`. Po 06.10.2026 na
+maszynie z pełnym `results/` wystarczy `layers` / Krok 6; przy braku `results/` — nowy
+przebieg jak w `KOD.md` §2.
 
 1. **Dane.** `results/` i `cache/` nie są w gicie (`.gitignore`). Obie drogi są poprawne,
    warunek: wszystkie pliki z **jednego** przebiegu (nie mieszać starych i nowych), a w pracy
    podana data zebrania danych.
-   - **Kopia** z poprzedniego komputera: minimum `results/candidates.jsonl` (23 MB), zalecany
-     cały `results/` (~650 MB). Liczby w tym planie i w `KOD.md` zostają aktualne.
+   - **Kopia** z komputera z przebiegiem 06.10: cały `results/` (matryca + katalogi + sonda).
    - **Nowy przebieg** Kroków 1–4 i `candidates` (pełny przebieg w `KOD.md`, rozdział 2;
-     potrzebny `.env` z PAT, kilka godzin zapytań do Huba): świeższe tagi, bliżej daty skanu
-     i prawdopodobnie mniej `miss` w sondzie. Zbiór będzie inny, więc liczby z Kroków 1–4
-     i symulacji `select` w tym planie i w `KOD.md` trzeba podmienić.
-2. **Środowisko:** `.venv` tworzy się od nowa według `KOD.md` → rozdział 2 „Uruchomienie”
-   (na Linuksie z terminala Cursora przez `env -i`, bo AppImage psuje `python3 -m venv`).
-   `.env` z PAT (wzór `.env.example`) potrzebny tylko Krokom 1–4 — `candidates`, sonda i `select` z niego nie
-   korzystają (sonda pyta anonimowo `mirror.gcr.io`, `candidates`/`select` są offline).
-3. **Sonda (~4 h, sieć):** zapytania idą po kolei, a wynik zapisywany jest dopiero na końcu —
-   przerwanie oznacza start od zera. Uruchamiać w tle, z logiem:
-
-   ```bash
-   nohup .venv/bin/python src/Classify.py probe-tags --in results/candidates.jsonl \
-       --out results/candidates_probed.jsonl > results/probe.log 2>&1 &
-   tail -f results/probe.log        # postęp co 500 obrazów
-   ```
-4. **Losowanie (offline, sekundy):** `.venv/bin/python src/Matrix.py select -v`.
-   Sprawdzić w logu liczbę odrzuconych obrazów tylko z Huba (próba 300: ok. 14% `miss`)
-   i w `results/matrix_report.json` liczbę par per klasa; porównać z symulacją powyżej
-   (górna granica: 9 940 obrazów, 1 397 par slim, 2 433 alpine, 28 grup z distroless).
-   Wyniki dopisać tutaj i w `KOD.md` (rozdział 10).
+     potrzebny `.env` z PAT): świeższe tagi; liczby w tym planie trzeba wtedy podmienić.
+2. **Środowisko:** `.venv` według `KOD.md` §2. `.env` z PAT tylko do Kroków 1–4.
+3. **Sonda (~2–4 h):** na Windowsie w tle z logiem do `results/probe.log`; postęp co 500,
+   potem długa cisza na ponowieniach `miss`.
+4. **Losowanie:** `python src/Matrix.py select -v` (domyślnie cała pula par). Oczekiwać
+   ~9,9 tys. obrazów przy miss ≈ 58%; liczby dopisać tutaj i w `KOD.md` (rozdział 10).
 
 Zasady pracy: kod prosty, na poziomie studenta 3. roku, bez sztuczek; osobny commit na każdą
 zmianę; bez trailera `Co-authored-by: Cursor` w commitach (w razie potrzeby usuwany
