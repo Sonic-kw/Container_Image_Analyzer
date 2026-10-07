@@ -697,12 +697,13 @@ z największą liczbą par (`python`, `node`, `openjdk`), a miejsce zajmowały g
 - **`descriptive`** — grupy bez pary, limit 150, dopełniają matrycę do 10 tys. **Wyłącznie do
   punktu 5** (opis ekosystemu); nie wchodzą do porównań metod utwardzania.
 
-**Przebieg 06.10.2026 (po sondzie lustra):** 9 923 obrazów — `pairs` 5 469 (1 529 par `slim`,
-1 336 `alpine`, 27 `distroless`) i `descriptive` 4 454. Klasy: 6 361 `standard`, 1 808
-`alpine`, 1 699 `slim`, 55 `distroless`. Sonda: 9 459 `hit`, 2 206 `cold_miss`, **16 377
-`miss`** (~58% kandydatów tylko na Hubie — odrzucone). Do targetu 10 tys. brakuje 77 obrazów
-(wyczerpana pula `descriptive` pod `desc_cap`). Symulacja sprzed sondy (górna granica przy
-100% lustra) nie obowiązuje — obowiązują liczby po `miss`.
+**Przebieg 06.10.2026 (po sondzie lustra) + `layers` 07.10.2026:** 9 923 obrazów — `pairs`
+5 469 (1 529 par `slim`, 1 336 `alpine`, 27 `distroless`) i `descriptive` 4 454. Klasy:
+6 361 `standard`, 1 808 `alpine`, 1 699 `slim`, 55 `distroless`. Sonda: 9 459 `hit`,
+2 206 `cold_miss`, **16 377 `miss`** (~58% kandydatów tylko na Hubie — odrzucone). Do targetu
+10 tys. brakuje 77 obrazów (wyczerpana pula `descriptive` pod `desc_cap`). `layers`: wszystkie
+9 923 manifesty z listą warstw, **0** kolizji `layer_key`, N bez zmian. Symulacja sprzed
+sondy nie obowiązuje — obowiązują liczby po `miss` i po `layers`.
 
 ## Pilotaż weryfikujący metodykę (13.09.2026)
 
@@ -1116,9 +1117,10 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   1 278 `onbuild`, zostaje 271 884 wierszy. Linii OS
   nie da się ustalić dla 40% wierszy `library/` i 82% wierszy z wyszukiwania (tagi bez
   sufiksu systemu, np. `flywheel/python`, `amazon/aws-lambda-*`).
-- [ ] **Krok 5 — matryca ~10 tys.** Merge Hub + GCR, sonda lustra, `select` w dwóch warstwach,
-  wyliczenie `paired`. **Stan 06.10.2026:** `candidates` + `probe-tags` + `select` gotowe
-  (`matrix.jsonl` = 9 923); brakuje `Matrix.py layers` (dedup `layer_key`).
+- [x] **Krok 5 — matryca ~10 tys.** Merge Hub + GCR, sonda lustra, `select` w dwóch warstwach,
+  `layers` (`layer_key`), wyliczenie `paired`. **Zamknięty 07.10.2026:** `matrix.jsonl` =
+  **9 923** wierszy z wypełnionym `layer_key`; drugi stopień dedupu nie usunął żadnego
+  wiersza (0 kolizji warstw przy 0 fallbackach) — patrz wynik `layers` niżej.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
   Szczegóły: [Krok 5 — decyzje i rozpisanie](#krok-5--decyzje-i-rozpisanie).
   Analiza przy niepełnych grupach: [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
@@ -1238,7 +1240,7 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
    1 808 `alpine`, 1 699 `slim`, 55 `distroless`; pary 1 529 `slim` / 1 336 `alpine` /
    27 `distroless`; repo z parą 21 / 53 / 4; grup z pełnymi 4 klasami **8**; trójkątów
    `alpine`+`slim`+`standard` 294. Parowanie distroless jak wyżej (partnerzy bez zmian
-   jakościowych względem 01.10). `Matrix.py layers` nadal do zrobienia.
+   jakościowych względem 01.10).
 
    Linia OS jest w kluczu grupy, bo `python:3.11` na `bookworm` i na `trixie` to różne
    obrazy — bez tego `python3-debian12` nie miałby partnera (pierwsza wersja kodu zachowywała
@@ -1255,17 +1257,29 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
      `debian12`/`debian13` nie ma oficjalnego partnera na Debianie (`eclipse-temurin` stoi na
      Ubuntu). Do opisania w rozdz. 6.
 
-   Zapas 5% na drugi stopień deduplikacji nie jest jeszcze losowany — dojdzie razem
-   z `Matrix.py layers`.
-3. **`Matrix.py layers`** (sieć): `GET mirror.gcr.io/v2/<repo>/manifests/<arch_digest>`,
-   `layer_key = sha256(lista digestów warstw)`; distroless z `gcr.io`. **Nie z Docker Huba** —
-   `GET` manifestu liczy się tam do limitu 200 / 6 h. Przy chybieniu na lustrze
-   `layer_key = arch_digest` (ograniczenie do opisania). Potem dedup po `layer_key`
-   i dobranie z zapasu.
+   Zapas 5% pod ubytek z `layers` nie był potrzebny w przebiegu 07.10 (0 usunięć) i nie jest
+   losowany w `select` — matryca i tak jest poniżej targetu 10 tys.
+3. [x] **`Matrix.py layers`** (sieć, zrobione 07.10.2026): `GET mirror.gcr.io/v2/<repo>/manifests/<arch_digest>`,
+   `layer_key = sha256(lista digestów warstw)`; distroless z `gcr.io`. **Nie z Docker Huba**.
+   Przy chybieniu: `layer_key = arch_digest` (`layer_key_source = arch_digest_fallback`).
+   Dedup po `layer_key`; przy kolizji wygrywa wiersz z `stratum=pairs`, odrzucone
+   `logical_ref` → `layer_dupes`. Zapasu dobierającego nie było.
+
+   **Wynik 07.10.2026** (~24 min, 9 923 `GET` manifestów):
+   - `layer_key` z listy warstw: **9 923 / 9 923** (fallback: **0**)
+   - po dedupie: **9 923 → 9 923** (usunięte duplikaty profilu CVE: **0**)
+   - pary / klasy / stratum bez zmian względem `select`
+
+   **Wniosek do pracy:** w tej matrycy (po dedupie `arch_digest`, regule minor i filtrze
+   lustra) nie wystąpiły pary obrazów o różnych manifestach amd64 i identycznych warstwach.
+   Drugi stopień nie zmniejszył N, ale dostarczył jawny `layer_key` i empiryczny dowód, że
+   stopień pierwszy wystarczał dla niezależności obserwacji CVE w tej próbie. Reguła
+   `layer_key` zostaje w metodyce (Konsekwencja 3) — na wypadek innych przebiegów / korpusów.
 4. **`paired`** po końcowym dedupie: grupa ma `standard` i ≥ 1 klasę utwardzoną. Dodatkowo
-   `triangle`: grupa z distroless.
+   `triangle`: grupa z distroless. Przeliczane ponownie w `layers`.
 5. **Raport** `results/matrix_report.json` + log: rozkład klas, liczba grup, liczebność
-   podzbiorów `paired` i `triangle`, distroless per technologia i linia.
+   podzbiorów `paired` i `triangle`, distroless per technologia i linia; po `layers` także
+   `rows_before` / `dropped_layer_dupes` / `layer_key_fallback`.
 6. **`Classify.py probe-tags` na kandydatach, przed `select`** (decyzja 5). Pełna sonda
    ~28 tys. obrazów trwa ok. 2–4 h (po kolei; faza ponowień chybień bez logu co 500).
    **Zrobione 06.10.2026** → `results/candidates_probed.jsonl`. Kolejność:
@@ -1274,27 +1288,26 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
    python src/Matrix.py candidates
    python src/Classify.py probe-tags --in results/candidates.jsonl --out results/candidates_probed.jsonl
    python src/Matrix.py select
+   python src/Matrix.py layers
    ```
 7. Dokumentacja: decyzje tutaj, opis kodu w `KOD.md`.
 
-Aktualny `results/matrix.jsonl` pochodzi z przebiegu **06.10.2026** (`select` z
-`--pair-cap 99999` po sondzie). `Matrix.py layers` jeszcze nie.
+Aktualny `results/matrix.jsonl` pochodzi z przebiegu **06–07.10.2026** (`select` + `layers`).
 
-#### Stan po przebiegu 06.10.2026
+#### Stan po przebiegu 07.10.2026
 
-Ostatni zrobiony krok: `Matrix.py select` → `results/matrix.jsonl` (**9 923** wierszy) +
-`matrix_report.json`. Następny: `Matrix.py layers` (punkt 3 wyżej), potem Krok 6 (skaner).
+Ostatni zrobiony krok: `Matrix.py layers` → `results/matrix.jsonl` (**9 923** wierszy z
+`layer_key`) + `matrix_report.json`. **Krok 5 zamknięty.** Następny: Krok 6 (skaner Trivy).
 
-Dane `results/` i `cache/` nie są w gicie. Pełny przebieg Kroków 1–5A (bez `layers`) jest
-w logach `results/run_*.log` i `results/probe.log`. Na Windowsie: `.venv\Scripts\python.exe`,
-sonda bez `nohup` (Start-Process / sesja w tle). Analiza niepełnych grup:
+Dane `results/` i `cache/` nie są w gicie. Logi: `results/run_*.log`, `results/probe.log`,
+`results/run_k5_layers.log`. Na Windowsie: `.venv\Scripts\python.exe`. Analiza niepełnych grup:
 [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
 
 #### Wznowienie pracy na innym komputerze (stan 05.10.2026 — historyczne)
 
-Poniżej procedura z chwili, gdy lokalnie było tylko `candidates.jsonl`. Po 06.10.2026 na
-maszynie z pełnym `results/` wystarczy `layers` / Krok 6; przy braku `results/` — nowy
-przebieg jak w `KOD.md` §2.
+Poniżej procedura z chwili, gdy lokalnie było tylko `candidates.jsonl`. Po 07.10.2026 na
+maszynie z pełnym `results/` (matryca po `layers`) wystarczy Krok 6; przy braku `results/` —
+nowy przebieg jak w `KOD.md` §2.
 
 1. **Dane.** `results/` i `cache/` nie są w gicie (`.gitignore`). Obie drogi są poprawne,
    warunek: wszystkie pliki z **jednego** przebiegu (nie mieszać starych i nowych), a w pracy
@@ -1305,8 +1318,9 @@ przebieg jak w `KOD.md` §2.
 2. **Środowisko:** `.venv` według `KOD.md` §2. `.env` z PAT tylko do Kroków 1–4.
 3. **Sonda (~2–4 h):** na Windowsie w tle z logiem do `results/probe.log`; postęp co 500,
    potem długa cisza na ponowieniach `miss`.
-4. **Losowanie:** `python src/Matrix.py select -v` (domyślnie cała pula par). Oczekiwać
-   ~9,9 tys. obrazów przy miss ≈ 58%; liczby dopisać tutaj i w `KOD.md` (rozdział 10).
+4. **Losowanie + layers:** `python src/Matrix.py select -v`, potem `python src/Matrix.py layers`.
+   Oczekiwać ~9,9 tys. obrazów przy miss ≈ 58%; w przebiegu 07.10 `layers` nie zmienił N
+   (0 kolizji `layer_key`). Liczby dopisać tutaj i w `KOD.md` (rozdział 10).
 
 Zasady pracy: kod prosty, na poziomie studenta 3. roku, bez sztuczek; osobny commit na każdą
 zmianę; bez trailera `Co-authored-by: Cursor` w commitach (w razie potrzeby usuwany
@@ -1374,11 +1388,11 @@ zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
 Repozytorium zawiera `Dockerfile` (środowisko Trivy), `requirements.txt`, dokumentację
 w `docs/` (ten plan i opis kodu [`KOD.md`](KOD.md)) oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
 `GetTags.py` (Krok 3), `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`) i `Matrix.py`
-(Krok 5: `candidates`, `select`). Wyniki
+(Krok 5: `candidates`, `select`, `layers`). Wyniki
 (`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
 digestów. PoC `scanner.py` został usunięty (commit `57ef163`); jego błędy są spisane jako
-[wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6), a implementacja idzie od
-nowa według Kroków 1–6.
+[wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6). **Kroki 1–5 zamknięte**;
+następny jest Krok 6 (skaner).
 
 ### Implementacja fetchera z sierpnia — wątek zamknięty
 
