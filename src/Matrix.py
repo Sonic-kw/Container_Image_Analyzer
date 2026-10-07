@@ -13,19 +13,28 @@ select (offline): kandydaci po sondzie -> results/matrix.jsonl
      distroless, jesli zgadza sie technologia, wersja runtime'u i linia Debiana
   5. dwie warstwy: "pairs" - grupy sparowane, z limitem na repozytorium;
      "descriptive" - grupy bez pary, dopelniaja matryce do --target (tylko punkt 5 pracy)
+
+layers (siec): results/matrix.jsonl -> ten sam plik z layer_key
+  6. GET manifestu amd64 z mirror.gcr.io (distroless: gcr.io); layer_key = sha256(lista
+     digestow warstw); przy chybieniu layer_key = arch_digest
+  7. dedup po layer_key (drugi stopien; arch_digest byl pierwszym)
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
-from Classify import read_jsonl
+import requests
+
+from Classify import GCR_HOST, MIRROR_HOST, read_jsonl
+from hub_http import MANIFEST_ACCEPT, TIMEOUT, build_session
 
 log = logging.getLogger("matrix")
 
@@ -432,6 +441,174 @@ def build_report(chosen: list[dict], params: dict) -> dict:
     }
 
 
+def registry_host(row: dict) -> str:
+    if row.get("source_registry") == "gcr" or row.get("registry") == "gcr":
+        return GCR_HOST
+    return MIRROR_HOST
+
+
+def registry_repo(row: dict) -> str:
+    return row["repo_key"].removeprefix(f"{GCR_HOST}/")
+
+
+def fetch_layer_digests(session: requests.Session, row: dict) -> list[str] | None:
+    """Lista digestow warstw z manifestu amd64; None gdy brak albo to indeks, nie obraz."""
+    digest = row.get("arch_digest")
+    if not digest:
+        return None
+    host = registry_host(row)
+    repo = registry_repo(row)
+    response = session.get(
+        f"https://{host}/v2/{repo}/manifests/{digest}",
+        headers={"Accept": MANIFEST_ACCEPT},
+        timeout=TIMEOUT,
+        allow_redirects=True,
+    )
+    if response.status_code != 200:
+        if response.status_code != 404:
+            log.warning("  %s/%s@%s: HTTP %d", host, repo, digest[:19], response.status_code)
+        return None
+    payload = response.json()
+    layers = payload.get("layers")
+    if not layers:
+        # Indeks/lista manifestow zamiast obrazu - nie da sie zbudowac layer_key z warstw.
+        return None
+    digests = []
+    for layer in layers:
+        layer_digest = layer.get("digest")
+        if not layer_digest:
+            return None
+        digests.append(layer_digest)
+    return digests
+
+
+def make_layer_key(digests: list[str]) -> str:
+    hasher = hashlib.sha256()
+    for digest in digests:
+        hasher.update(digest.encode("utf-8"))
+        hasher.update(b"\n")
+    return "sha256:" + hasher.hexdigest()
+
+
+def layer_keep_score(row: dict) -> tuple:
+    """Ktory wiersz zostaje przy kolizji layer_key - woli pairs i bogatszy tag."""
+    return (
+        row.get("stratum") == "pairs",
+        bool(row.get("paired")),
+        tag_score(row),
+        pushed(row),
+    )
+
+
+def assign_layer_keys(session: requests.Session, rows: list[dict]) -> Counter[str]:
+    stats: Counter[str] = Counter()
+    total = len(rows)
+    for index, row in enumerate(rows, start=1):
+        digests = fetch_layer_digests(session, row)
+        if digests:
+            row["layer_key"] = make_layer_key(digests)
+            row["layer_key_source"] = "layers"
+            stats["layer_key:layers"] += 1
+            stats["layers_total"] += len(digests)
+        else:
+            row["layer_key"] = row.get("arch_digest")
+            row["layer_key_source"] = "arch_digest_fallback"
+            stats["layer_key:fallback"] += 1
+        if index % 500 == 0 or index == total:
+            log.info(
+                "  manifesty %d/%d (warstwy: %d, fallback: %d)",
+                index,
+                total,
+                stats["layer_key:layers"],
+                stats["layer_key:fallback"],
+            )
+    return stats
+
+
+def dedup_by_layer_key(rows: list[dict]) -> tuple[list[dict], int]:
+    """Jeden wiersz na layer_key; odrzucone logical_ref trafiaja do layer_dupes zwyciezcy."""
+    by_key: dict[str, dict] = {}
+    dropped = 0
+    for row in rows:
+        key = row["layer_key"]
+        if key not in by_key:
+            row.setdefault("layer_dupes", [])
+            by_key[key] = row
+            continue
+        kept = by_key[key]
+        dropped += 1
+        if layer_keep_score(row) > layer_keep_score(kept):
+            row["layer_dupes"] = kept.get("layer_dupes", []) + [kept["logical_ref"]]
+            by_key[key] = row
+        else:
+            kept.setdefault("layer_dupes", []).append(row["logical_ref"])
+    return list(by_key.values()), dropped
+
+
+def remmark_after_layer_dedup(rows: list[dict]) -> list[dict]:
+    """Przelicza paired/triangle w grupach po usunieciu duplikatow warstw."""
+    by_gid: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_gid[row["group_id"]].append(row)
+
+    groups = []
+    for group_id, members in by_gid.items():
+        group = {
+            "group_id": group_id,
+            "repo_key": members[0]["repo_key"],
+            "rows": members,
+            "stratum": members[0].get("stratum", "descriptive"),
+        }
+        mark_pairs(group)
+        for row in members:
+            row["paired"] = group["paired"]
+            row["triangle"] = group["triangle"]
+        groups.append(group)
+    return groups
+
+
+def layers(in_path: Path, out_path: Path, report_path: Path) -> dict:
+    rows = list(read_jsonl([in_path]))
+    if not rows:
+        raise SystemExit(f"{in_path}: pusty plik")
+    log.info("wierszy wejsciowych: %d", len(rows))
+
+    session = build_session(use_cache=False)
+    try:
+        fetch_stats = assign_layer_keys(session, rows)
+    finally:
+        session.close()
+
+    kept, dropped = dedup_by_layer_key(rows)
+    log.info(
+        "po dedupie layer_key: %d (usunieto %d duplikatow profilu CVE)",
+        len(kept),
+        dropped,
+    )
+
+    groups = remmark_after_layer_dedup(kept)
+    # Zachowaj troszkę stabilniejsza kolejnosc: najpierw pairs, potem group_id.
+    groups.sort(key=lambda g: (g["stratum"] != "pairs", g["group_id"]))
+    out_rows = []
+    for group in groups:
+        for row in group["rows"]:
+            out_rows.append(row)
+    write_jsonl(out_path, out_rows)
+
+    params = {
+        "command": "layers",
+        "in": str(in_path),
+        "rows_before": len(rows),
+        "rows_after": len(out_rows),
+        "dropped_layer_dupes": dropped,
+        "layer_key_from_layers": fetch_stats["layer_key:layers"],
+        "layer_key_fallback": fetch_stats["layer_key:fallback"],
+    }
+    report = build_report(groups, params)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Krok 5 - matryca testowa")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -456,6 +633,15 @@ def main() -> None:
     sel.add_argument("--seed", type=int, default=2026, help="ziarno losowania (powtarzalnosc)")
     sel.add_argument("--verbose", "-v", action="store_true")
 
+    lyr = sub.add_parser(
+        "layers",
+        help="layer_key z manifestow (siec) i dedup drugiego stopnia",
+    )
+    lyr.add_argument("--in", dest="in_path", type=Path, default=Path("results/matrix.jsonl"))
+    lyr.add_argument("--out", type=Path, default=Path("results/matrix.jsonl"))
+    lyr.add_argument("--report", type=Path, default=Path("results/matrix_report.json"))
+    lyr.add_argument("--verbose", "-v", action="store_true")
+
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -471,6 +657,18 @@ def main() -> None:
                         args.seed)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info("wierszy: %d %s", report["rows"], report["rows_per_stratum"])
+        log.info("pary: %s, repozytoriow z para: %s", report["pairs"], report["repos_with_pair"])
+        log.info("klasy: %s", report["variants"])
+        log.info("gotowe -> %s, raport -> %s", args.out, args.report)
+    elif args.command == "layers":
+        report = layers(args.in_path, args.out, args.report)
+        log.info(
+            "wierszy: %d -> %d (duplikaty layer_key: %d, fallback: %d)",
+            report["params"]["rows_before"],
+            report["params"]["rows_after"],
+            report["params"]["dropped_layer_dupes"],
+            report["params"]["layer_key_fallback"],
+        )
         log.info("pary: %s, repozytoriow z para: %s", report["pairs"], report["repos_with_pair"])
         log.info("klasy: %s", report["variants"])
         log.info("gotowe -> %s, raport -> %s", args.out, args.report)
