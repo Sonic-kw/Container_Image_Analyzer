@@ -5,8 +5,9 @@ pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia me
 (dlaczego cztery klasy, dlaczego tylko `latest` z distroless, skąd próg 10 tys.) są w
 [`PLAN.md`](PLAN.md); tutaj pojawiają się tylko tam, gdzie tłumaczą konkretną linię kodu.
 
-Krok 5 (matryca) ma na razie polecenie `select`; `layers` i Krok 6 (skaner Trivy) nie mają
-jeszcze kodu.
+Krok 5 (matryca) ma `candidates` i `select`; `layers` i Krok 6 (skaner Trivy) nie mają
+jeszcze kodu. Liczby z przebiegu **06.10.2026** są w §10; uzasadnienia metodologiczne
+(niepełne grupy, analiza) — w [`PLAN.md`](PLAN.md).
 
 ## Spis treści
 
@@ -75,10 +76,19 @@ bieżącego katalogu.
 `requests_cache` jest opcjonalny:
 bez niego kod działa, tylko bez cache HTTP (patrz [rozdział 12](#12-cache-i-wznawianie)).
 
-**Środowisko `.venv` na Linuksie.** Terminal otwarty w Cursorze (AppImage) dziedziczy zmienne
-środowiskowe AppImage, przez które `python3 -m venv` tworzy dowiązania do
-`/opt/cursor.appimage` zamiast do Pythona — takie `.venv` nie działa. Środowisko tworzy się
-więc w czystym środowisku:
+**Środowisko `.venv`.**
+
+Na **Windows 11** (PowerShell), z katalogu głównego repozytorium:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe src\GetRepo.py hub
+```
+
+Na **Linuksie** terminal otwarty w Cursorze (AppImage) dziedziczy zmienne AppImage, przez które
+`python3 -m venv` tworzy dowiązania do `/opt/cursor.appimage` zamiast do Pythona — takie
+`.venv` nie działa. Środowisko tworzy się w czystym środowisku:
 
 ```bash
 rm -rf .venv
@@ -86,7 +96,8 @@ env -i HOME=$HOME PATH=/usr/bin:/bin /usr/bin/python3 -m venv .venv
 env -i HOME=$HOME PATH=/usr/bin:/bin .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Uruchamianie skryptów (`.venv/bin/python src/...`) działa potem normalnie.
+Uruchamianie: `.venv/bin/python src/...` (Linux) albo `.\.venv\Scripts\python.exe src\...`
+(Windows).
 
 **Sekrety.** Plik `.env` w katalogu głównym (wzór: `.env.example`):
 
@@ -496,17 +507,21 @@ Liczniki `registry:*` liczą tylko wiersze niewykluczone.
 
 ## 9. Krok 4C — `Classify.py probe-tags`: sonda lustra
 
-**Cel:** sprawdzić, czy lustro `mirror.gcr.io` ma każdy obraz matrycy, i na tej podstawie
-ostatecznie wybrać ścieżkę: lustro (poza limitem Huba) albo Hub (200 pobrań / 6 h).
+**Cel:** sprawdzić, czy lustro `mirror.gcr.io` ma każdy obraz-kandydat (po `arch_digest`).
+Wynik zapisuje `mirror_probe` / `registry` / `pull_ref`. **Do matrycy nie wchodzi Hub** —
+`Matrix.py select` odrzuca wiersze z `registry = hub` (`miss`). Log `budget_line` liczy
+kandydatów oznaczonych jako Hub **po sondzie** (ostrzeżenie o skali, gdyby ktoś brał Hub);
+po decyzji 05.10.2026 te wiersze i tak odpadają przed losowaniem.
 
 ```bash
-python src/Classify.py probe-tags --in MATRYCA --out WYNIK [--retry-delay 60] [-v]
+python src/Classify.py probe-tags --in results/candidates.jsonl \
+    --out results/candidates_probed.jsonl [--retry-delay 60] [-v]
 ```
 
-Uruchamiana na **kandydatach Kroku 5** (`Matrix.py candidates`, ok. 28 tys. wierszy), przed
-losowaniem — nie na 270 tys. tagów. `Matrix.py select` odrzuca potem obrazy z wynikiem `miss`,
-więc nic nie jest pobierane z Docker Huba, a `budget_line` powinno pokazać zero obrazów w
-matrycy, które idą przez Hub.
+Uruchamiana na **kandydatach** (`Matrix.py candidates`, ~28 tys. wierszy), przed `select` —
+nie na 270 tys. tagów. Przebieg 06.10.2026: 9 459 `hit`, 2 206 `cold_miss`, **16 377 `miss`**
+(~58%); pierwsza fala ~2–2,5 h, potem cisza na ponowieniach chybień (brak logu co 500
+w przebiegu 2), łącznie ok. 2,5–4 h.
 
 ### `head_manifest(session, host, repo, reference)`
 
@@ -525,19 +540,20 @@ program.
    `mirror_probe = "hit"`; cokolwiek innego → lista `first_miss`. Co 500 wierszy log postępu.
 4. **Odczekanie.** Jeśli były chybienia: `time.sleep(--retry-delay)`. Lustro to pull-through
    cache — pierwsze `404` często znaczy „jeszcze nie mam, właśnie ściągam z Huba”.
-5. **Przebieg 2** — tylko na chybieniach: `200` → `cold_miss`, inaczej `miss`.
+5. **Przebieg 2** — tylko na chybieniach, **bez** logu co 500: `200` → `cold_miss`,
+   inaczej `miss`. Stąd długa cisza w logu przy dużej liczbie chybień.
 6. **Zapis.** Dla każdego sondowanego wiersza:
    - `mirror_ok = (mirror_probe != "miss")`;
    - `registry = mirror` albo `hub`;
    - `pull_ref` przeliczony: `mirror.gcr.io/…@digest` albo `docker.io/…@digest`;
    - `mirror_probed_at` = bieżący czas UTC.
-   Wiersze niesondowane są zapisywane bez zmian, w oryginalnej kolejności.
-7. Liczniki `probe:*` i `registry:*`, a na końcu `budget_line`: liczba obrazów przez Hub
-   przeliczona na partie po 200 i godziny (`partie × 6 h`).
+   Wiersze niesondowane (distroless) są zapisywane bez zmian, w oryginalnej kolejności.
+7. Liczniki `probe:*` i `registry:*`, a na końcu log `matryca: …` z `budget_line` —
+   liczba kandydatów z `registry:hub` po sondzie (nie finalna matryca). Przy przebiegu
+   06.10 było to 16 377; `select` je potem odrzuca.
 
 Test 29.09.2026 na 15 wierszach: 8 `hit`, 6 `miss` (stare tagi, np. `python:2.7.9-wheezy`,
-`mysql:5.7.18`, `redis:2.8.18` — brak potwierdzony ponowną sondą kilka minut później),
-distroless przepuszczony.
+`mysql:5.7.18`, `redis:2.8.18`), distroless przepuszczony.
 
 ## 10. Krok 5A — `Matrix.py candidates` i `select`: matryca
 
@@ -551,12 +567,16 @@ python src/Matrix.py candidates [--in results/refs.jsonl] [--out results/candida
 python src/Classify.py probe-tags --in results/candidates.jsonl --out results/candidates_probed.jsonl
 python src/Matrix.py select [--in results/candidates_probed.jsonl] [--out results/matrix.jsonl]
                             [--report results/matrix_report.json] [--target 10000]
-                            [--pair-cap 300] [--desc-cap 150] [--seed 2026] [-v]
+                            [--pair-cap 99999] [--desc-cap 150] [--seed 2026] [-v]
 ```
 
-Sonda idzie **przed** losowaniem: gdyby szła po nim, odrzucenie obrazu dostępnego tylko na
-Hubie rozbijałoby wylosowaną parę. Pełna sonda ~28 tys. kandydatów trwa ok. 4 h (zapytania
-po kolei, ok. 0,42 s każde).
+Domyślne `--pair-cap` to **99999** (bez praktycznego limitu — cała pula par z lustra).
+Wcześniejsza wartość 300 ucinała ~1,9 tys. obrazów w parach (`library/node`, `library/debian`).
+Dominacja tych repo w N jest OK: główny test w pracy to mediana delt per repozytorium
+(patrz `PLAN.md`).
+
+Sonda idzie **przed** losowaniem: gdyby szła po nim, odrzucenie `miss` rozbijałoby pary.
+Czas: ok. 2,5–4 h na ~28 tys. kandydatów (po kolei; druga fala bez logu postępu).
 
 Z `Classify.py` importowana jest tylko funkcja `read_jsonl`.
 
@@ -598,9 +618,11 @@ kroki 4–10 — `select`.
    Log wypisuje dla każdego obrazu distroless, do której grupy trafił.
 7. **Oznaczenie grup** (`mark_pairs`): `paired` — grupa ma `standard` i co najmniej jedną inną
    klasę; `triangle` — ma `standard` i distroless.
-8. **Warstwa `pairs`:** wszystkie grupy sparowane, w każdym repozytorium losowane przez
-   `pick_groups` (ziarno `--seed`) do `--pair-cap` obrazów. Grupy z distroless wchodzą zawsze,
-   pozostałe w losowej kolejności; grupa wchodzi w całości albo wcale.
+8. **Warstwa `pairs`:** wszystkie grupy sparowane, w każdym repozytorium brane przez
+   `pick_groups` (ziarno `--seed`) do `--pair-cap` obrazów. Przy domyślnym 99999 wchodzi
+   praktycznie cała pula par z lustra. Grupy z distroless wchodzą zawsze, pozostałe w losowej
+   kolejności; grupa wchodzi w całości albo wcale. W grupie `standard` jest **jednym**
+   wierszem — delty slim/alpine/distroless liczą się względem niego przy jednym skanie.
 9. **Warstwa `descriptive`:** grupy bez pary dopełniają matrycę do `--target`. Każde
    repozytorium ma wagę `log(1 + liczba grup)` i dostępną liczbę obrazów przyciętą do
    `--desc-cap`; `allocate_quotas` dzieli wolne miejsce (target minus warstwa `pairs` minus
@@ -612,9 +634,24 @@ kroki 4–10 — `select`.
     raport (`build_report`) z liczbą obrazów per warstwa i klasa, liczbą par per klasa
     i repozytoriów z parą, liczbą obrazów na repozytorium i statusem każdego obrazu distroless.
 
-Symulacja 05.10.2026 (wszyscy kandydaci oznaczeni jako dostępni na lustrze — górna granica przed
-prawdziwą sondą, ziarno 2026): 9 940 obrazów — warstwa `pairs` 7 404 (1 397 par `slim`,
-2 433 `alpine`, 28 grup z distroless), `descriptive` 2 536.
+**Przebieg 06.10.2026** (świeże Kroki 1–4, sonda, `select` z `--pair-cap 99999`, ziarno 2026):
+
+| | Wartość |
+| --- | --- |
+| katalog Hub / GCR | 13 516 repo; 56 distroless |
+| tagi | library 188 688 + search 148 726 |
+| candidates | 28 097 |
+| po sondzie (lustro/GCR) | 11 720 (odrzucone Hub-only: 16 377) |
+| matryca | **9 923** obrazów (do targetu 10 000 brakuje 77 — wyczerpana pula descriptive) |
+| stratum | pairs 5 469 / descriptive 4 454 |
+| klasy | standard 6 361, alpine 1 808, slim 1 699, distroless 55 |
+| pary | slim 1 529, alpine 1 336, distroless 27 |
+| repo z parą | slim 21, alpine 53, distroless 4 |
+| pełne 4 klasy / trójki alpine+slim+standard | 8 / 294 |
+
+Symulacja 05.10.2026 (100% lustra, bez prawdziwej sondy) dawała górną granicę ~9 940 przy
+`pair_cap=300` i innym rozkładzie warstw — **nie obowiązuje**; liczby powyżej są wiążące.
+Jak analizować niepełne grupy: `PLAN.md` → sekcja „Niepełne grupy”.
 
 ## 11. Formaty plików
 
@@ -742,7 +779,11 @@ parametry (`target`, `pair_cap`, `desc_cap`, `seed`), liczba wierszy (łącznie 
   czy `403`; takie przypadki są widoczne w logu jako ostrzeżenia HTTP. `429` i 5xx są najpierw
   ponawiane przez sesję, a po wyczerpaniu prób przerywają program — wtedy trzeba uruchomić
   sondę od nowa.
-- **`probe-tags` wczytuje całe wejście do pamięci** — przy matrycy ~10 tys. wierszy bez znaczenia,
-  przy 270 tys. rzędu kilkuset MB.
+- **`probe-tags` wczytuje całe wejście do pamięci** — przy ~28 tys. kandydatów bez znaczenia,
+  przy 270 tys. rzędu kilkuset MB. Wynik zapisuje dopiero na końcu — przerwanie = start od zera.
+- **Przebieg 2 sondy bez postępu w logu** — przy ~18 tys. chybień wygląda na zawieszenie;
+  proces nadal odpytuje lustro.
 - **Distroless** jest brany tylko jako `latest`; `resolve_gcr_digests` rozwiązuje go w chwili
   uruchomienia `assign`, więc ponowne `assign` po aktualizacji obrazu przez Google da nowy digest.
+- **`Matrix.py layers`** (dedup po liście warstw) nie jest jeszcze zaimplementowany — matryca
+  z `select` jest zdeduplikowana po `arch_digest`, nie po `layer_key`.
