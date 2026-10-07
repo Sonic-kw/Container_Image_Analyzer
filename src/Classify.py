@@ -97,7 +97,6 @@ DEBIAN_SUFFIX_RE = re.compile(r"-(debian\d+)$")
 
 
 def parse_tag(tag: str, repo_key: str = "") -> dict[str, Any]:
-    """Rozbij tag Huba na klase, linie OS, wersje i reszte tokenow."""
     debian_repo = repo_key == "library/debian"
     tokens = tag.lower().split("-")
     variant = "standard"
@@ -212,7 +211,6 @@ def _alias_key(row: dict[str, Any]) -> str | None:
 
 
 def resolve_aliases(rows: list[dict[str, Any]]) -> int:
-    """Uzupelnij os_line tagom bez sufiksu na podstawie tagu z tym samym obrazem amd64."""
     known: dict[str, set[str]] = {}
     for row in rows:
         key = _alias_key(row)
@@ -287,7 +285,6 @@ def classify(
     gcr_path: Path | None,
     out_path: Path,
 ) -> Counter[str]:
-    """Strumieniowo, repo po repo - GetTags zapisuje tagi zgrupowane per repozytorium."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     stats: Counter[str] = Counter()
     seen_repos: set[str] = set()
@@ -328,7 +325,6 @@ def _now() -> str:
 
 
 def head_manifest(session: requests.Session, host: str, repo: str, reference: str) -> int:
-    """HEAD na manifest; zwraca kod HTTP (200 = jest, 404 = brak)."""
     response = session.head(
         f"https://{host}/v2/{repo}/manifests/{reference}",
         headers={"Accept": MANIFEST_ACCEPT},
@@ -345,7 +341,6 @@ def head_manifest(session: requests.Session, host: str, repo: str, reference: st
 
 
 def resolve_gcr_digests(session: requests.Session, repo_key: str) -> tuple[str | None, str | None]:
-    """(digest indeksu, digest manifestu amd64) dla gcr.io/distroless/<repo>:latest."""
     repo = repo_key.removeprefix(f"{GCR_HOST}/")
     response = session.get(
         f"https://{GCR_HOST}/v2/{repo}/manifests/latest",
@@ -359,7 +354,6 @@ def resolve_gcr_digests(session: requests.Session, repo_key: str) -> tuple[str |
         platform = manifest.get("platform") or {}
         if platform.get("architecture") == "amd64" and platform.get("os") == "linux":
             return index_digest, manifest["digest"]
-    # Pojedynczy manifest zamiast indeksu - sam jest obrazem amd64.
     return index_digest, index_digest if not payload.get("manifests") else None
 
 
@@ -407,10 +401,6 @@ def probe_tags(
     out_path: Path,
     retry_delay: float,
 ) -> Counter[str]:
-    """Sonda per wiersz: czy lustro serwuje dokladnie ten manifest amd64.
-
-    mirror_probe: hit (200 od razu), cold_miss (404, potem 200), miss (404 dwa razy).
-    """
     rows = list(read_jsonl([in_path]))
     probed = [r for r in rows if r.get("registry") in ("mirror", "hub") and r.get("arch_digest")]
     first_miss: list[dict[str, Any]] = []
@@ -495,7 +485,6 @@ def main() -> None:
         log.info("gotowe -> %s", args.out)
         return
 
-    # Cache HTTP zapamietalby pierwsze 404 i zamaskowal chybienie na zimno.
     session = build_session(use_cache=False, hub_auth=False)
     try:
         if args.command == "assign":

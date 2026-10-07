@@ -44,7 +44,6 @@ class TagRecord:
 
 
 def logical_ref(namespace: str, name: str, tag: str) -> str:
-    """library/python:3.13-slim -> python:3.13-slim; inaczej ns/name:tag."""
     if namespace == "library":
         return f"{name}:{tag}"
     return f"{namespace}/{name}:{tag}"
@@ -65,7 +64,6 @@ def pick_amd64(images: list[dict[str, Any]] | None) -> tuple[str | None, int | N
         ):
             size = image.get("size")
             return image.get("digest"), int(size) if size is not None else None
-    # Fallback: first amd64 regardless of os.
     for image in images:
         if image.get("architecture") == PREFERRED_ARCH:
             size = image.get("size")
@@ -106,7 +104,6 @@ def fetch_repo_tags(
     use_disk_cache: bool,
     max_pages: int = MAX_PAGES,
 ) -> list[TagRecord]:
-    """Pobierz wszystkie tagi repo; przy hitcie dysku nie uderzaj w API."""
     path = cache_path(cache_dir, namespace, name)
     if use_disk_cache and path.is_file():
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -196,7 +193,6 @@ def select_repos(
     if source:
         selected = [row for row in selected if row.get("source") == source]
     if min_pulls is not None:
-        # library/ wchodzi zawsze - progu uzywamy tylko do odsiania szumu z search/.
         selected = [
             row
             for row in selected
@@ -212,7 +208,6 @@ def select_repos(
         missing = wanted - {
             row.get("name") for row in selected
         } - {row.get("repo_key") for row in selected}
-        # Allow --repos python without catalog: synthesize library/python.
         for name in sorted(missing):
             if "/" in name:
                 ns, _, nm = name.partition("/")
@@ -251,7 +246,6 @@ def build_tags(
                     use_disk_cache=use_disk_cache,
                 )
             except requests.HTTPError as error:
-                # Repo z katalogu moglo zostac usuniete z Huba w miedzyczasie.
                 if error.response is not None and error.response.status_code == 404:
                     log.warning("  %s/%s: 404, pomijam", namespace, name)
                     missing.append(f"{namespace}/{name}")
@@ -337,8 +331,6 @@ def main() -> None:
 
     log.info("repozytoriow do pobrania tagow: %d", len(repos))
 
-    # Disk cache = zrodlo prawdy dla resume; requests-cache wylaczamy przy dysku,
-    # zeby nie dublowac i nie trzymac partial pages.
     session = build_session(
         use_cache=not args.no_cache and args.no_disk_cache,
         cache_name="cache/hub_tags_http",

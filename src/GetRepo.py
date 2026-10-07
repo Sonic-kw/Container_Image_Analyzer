@@ -83,7 +83,6 @@ class Repo:
 
 @dataclass(frozen=True, slots=True)
 class DistrolessRepo:
-    """Jeden wiersz = jedno repozytorium distroless, tag latest (Konsekwencje 1 i 2)."""
 
     registry: str
     namespace: str
@@ -182,12 +181,10 @@ def build_hub_catalog(
 
 
 def is_rejected_tag(tag: str) -> bool:
-    """Filtr z planu: .sig/.att, update-available-, digesty, debug/nonroot, arch."""
     return bool(REJECT_TAG_RE.search(tag))
 
 
 def parse_readme_images(text: str) -> set[str]:
-    """Nazwy repo z README (bez prefiksu gcr.io/distroless/)."""
     return {m.group(1) for m in DISTROLESS_IMAGE_RE.finditer(text)}
 
 
@@ -200,7 +197,6 @@ def fetch_readme_images(session: requests.Session) -> set[str]:
 
 
 def list_distroless_children(session: requests.Session) -> list[str]:
-    """Dzieci projektu distroless - maly JSON, bez pola manifest."""
     response = session.get(f"{GCR_DISTROLESS}/tags/list", timeout=TIMEOUT)
     response.raise_for_status()
     children = list(response.json().get("child") or [])
@@ -209,7 +205,6 @@ def list_distroless_children(session: requests.Session) -> list[str]:
 
 
 def manifest_exists(session: requests.Session, name: str, tag: str) -> tuple[bool, str]:
-    """HEAD manifests/<tag> - potwierdzenie istnienia bez pobierania warstw."""
     url = f"{GCR_DISTROLESS}/{name}/manifests/{tag}"
     response = session.head(
         url,
@@ -221,7 +216,6 @@ def manifest_exists(session: requests.Session, name: str, tag: str) -> tuple[boo
         return True, fetched_at(response)
     if response.status_code == 404:
         return False, fetched_at(response)
-    # Niektore registry wymagaja GET zamiast HEAD.
     if response.status_code in (400, 405):
         response = session.get(
             url,
@@ -239,7 +233,6 @@ def manifest_exists(session: requests.Session, name: str, tag: str) -> tuple[boo
 
 
 def candidate_distroless_names(children: list[str], readme: set[str]) -> list[str]:
-    """README + dzieci z jawna linia -debianN; bez aliasow i test/."""
     names: set[str] = set()
     for child in children:
         if child in {"test"} or child.endswith((".sig", ".att")):

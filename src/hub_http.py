@@ -49,7 +49,6 @@ def require_env(name: str) -> str:
 
 
 def fetch_jwt(session: requests.Session, username: str, pat: str) -> str:
-    """PAT nie wolno wysylac jako Bearer. Hub wymaga JWT z /v2/auth/token."""
     response = session.post(
         HUB_AUTH,
         json={"identifier": username, "secret": pat},

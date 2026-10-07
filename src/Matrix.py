@@ -48,7 +48,6 @@ PYTHON_BY_DEBIAN = {
 
 
 def minor(version: str | None) -> str | None:
-    """'3.13.2' -> '3.13', '22' -> '22'."""
     if not version:
         return None
     parts = version.lstrip("v").split(".")
@@ -60,7 +59,7 @@ def pushed(row: dict) -> str:
 
 
 def runtime_version(row: dict) -> str | None:
-    """Wersja runtime'u w obrazie distroless; None, gdy obrazu nie da sie sparowac."""
+
     name = row["flavor"]
     if name == "python3":
         return PYTHON_BY_DEBIAN.get(row["os_line"])
@@ -82,14 +81,12 @@ def is_candidate(row: dict) -> bool:
 
 
 def tag_score(row: dict) -> tuple[bool, bool]:
-    """Ktory z aliasow zostaje wierszem kanonicznym - wieksza wartosc wygrywa."""
     if row["source_registry"] == "gcr":
         return (runtime_version(row) is not None, False)
     return (row["version"] is not None, row["os_line_source"] == "tag")
 
 
 def dedup_by_digest(rows: list[dict]) -> list[dict]:
-    """Jeden wiersz na obraz amd64; tagi pozostalych wierszy trafiaja do aliases."""
     by_digest: dict[str, dict] = {}
     for row in rows:
         key = row["arch_digest"]
@@ -107,7 +104,6 @@ def dedup_by_digest(rows: list[dict]) -> list[dict]:
 
 
 def keep_newest_per_minor(rows: list[dict]) -> list[dict]:
-    """Z wersji patch tej samej linii zostaje tylko ostatnio wypchnieta."""
     newest: dict[tuple, dict] = {}
     for row in rows:
         key = (row["repo_key"], minor(row["version"]), row["flavor"], row["variant"], row["os_line"])
@@ -138,12 +134,6 @@ def standard_row(group: dict) -> dict | None:
 
 
 def build_hub_groups(rows: list[dict]) -> list[dict]:
-    """Grupa = (repo, wersja X.Y, flavor, linia OS) z obrazami standard i slim.
-
-    standard i slim musza stac na tej samej linii, inaczej delta mierzylaby zmiane bazy.
-    Po regule minor kazda para (klasa, linia) ma juz tylko jeden obraz. alpine ma wlasna
-    linie, wiec dolacza do grupy z najnowszym obrazem standard tej wersji.
-    """
     by_key: dict[tuple, list[dict]] = {}
     for row in rows:
         key = (row["repo_key"], minor(row["version"]), row["flavor"])
@@ -212,7 +202,6 @@ def find_partner_group(groups: list[dict], row: dict) -> dict | None:
 
 
 def attach_distroless(groups: list[dict], distroless: list[dict]) -> list[dict]:
-    """Distroless dolacza do grupy partnera; bez partnera tworzy wlasna grupe."""
     alone = []
     for row in distroless:
         group = find_partner_group(groups, row)
@@ -242,11 +231,6 @@ def has_distroless(group: dict) -> bool:
 
 
 def allocate_quotas(available: dict[str, int], weights: dict[str, float], target: int) -> dict[str, int]:
-    """Podzial target miedzy repozytoria proporcjonalnie do wag.
-
-    Repozytorium, ktore nie wypelni swojej czesci, dostaje tyle, ile ma, a reszta
-    jest dzielona od nowa miedzy pozostale.
-    """
     quotas: dict[str, int] = {}
     active = set(available)
     remaining = target
@@ -274,7 +258,6 @@ def allocate_quotas(available: dict[str, int], weights: dict[str, float], target
 
 
 def pick_groups(groups: list[dict], quota: int, rng: random.Random) -> list[dict]:
-    """Grupy z distroless zawsze, pozostale w losowej kolejnosci, dopoki mieszcza sie w kwocie."""
     mandatory = []
     rest = []
     for group in groups:
@@ -335,7 +318,6 @@ def candidates(in_path: Path, out_path: Path) -> int:
 
 
 def load_probed(in_path: Path) -> list[dict]:
-    """Kandydaci po sondzie lustra; obrazy dostepne tylko na Docker Hubie odpadaja."""
     rows = []
     hub_only = 0
     for row in read_jsonl([in_path]):
