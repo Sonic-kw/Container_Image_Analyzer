@@ -5,9 +5,9 @@ pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia me
 (dlaczego cztery klasy, dlaczego tylko `latest` z distroless, skąd próg 10 tys.) są w
 [`PLAN.md`](PLAN.md); tutaj pojawiają się tylko tam, gdzie tłumaczą konkretną linię kodu.
 
-Krok 5 (matryca) ma `candidates` i `select`; `layers` i Krok 6 (skaner Trivy) nie mają
-jeszcze kodu. Liczby z przebiegu **06.10.2026** są w §10; uzasadnienia metodologiczne
-(niepełne grupy, analiza) — w [`PLAN.md`](PLAN.md).
+Krok 5 (matryca) ma `candidates`, `select` i `layers`; Krok 6 (skaner Trivy) nie ma
+jeszcze kodu. Liczby z przebiegu **06.10.2026** (przed `layers`) są w §10; uzasadnienia
+metodologiczne (niepełne grupy, analiza) — w [`PLAN.md`](PLAN.md).
 
 ## Spis treści
 
@@ -51,6 +51,8 @@ flowchart TD
   k4c --> probed["results/candidates_probed.jsonl"]
   probed --> k5s["Krok 5A: Matrix.py select"]
   k5s --> matrix["results/matrix.jsonl"]
+  matrix --> k5l["Krok 5B: Matrix.py layers"]
+  k5l --> matrix2["results/matrix.jsonl + layer_key"]
 ```
 
 | Plik | Polecenie | Wejście | Wyjście | Sieć |
@@ -64,6 +66,7 @@ flowchart TD
 | `src/Classify.py` | `probe-tags` | `candidates.jsonl` | `results/candidates_probed.jsonl` | `mirror.gcr.io` |
 | `src/Matrix.py` | `candidates` | `refs.jsonl` | `results/candidates.jsonl` | **brak** |
 | `src/Matrix.py` | `select` | `candidates_probed.jsonl` | `results/matrix.jsonl`, `results/matrix_report.json` | **brak** |
+| `src/Matrix.py` | `layers` | `matrix.jsonl` | `matrix.jsonl` + raport (z `layer_key`) | `mirror.gcr.io`, `gcr.io` |
 
 Moduły importują się nawzajem po nazwie (`from hub_http import ...`), więc skrypty uruchamia się
 jako `python src/<Plik>.py` z katalogu głównego repozytorium — Python dodaje wtedy `src/` do
@@ -568,6 +571,8 @@ python src/Classify.py probe-tags --in results/candidates.jsonl --out results/ca
 python src/Matrix.py select [--in results/candidates_probed.jsonl] [--out results/matrix.jsonl]
                             [--report results/matrix_report.json] [--target 10000]
                             [--pair-cap 99999] [--desc-cap 150] [--seed 2026] [-v]
+python src/Matrix.py layers [--in results/matrix.jsonl] [--out results/matrix.jsonl]
+                            [--report results/matrix_report.json] [-v]
 ```
 
 Domyślne `--pair-cap` to **99999** (bez praktycznego limitu — cała pula par z lustra).
@@ -653,6 +658,17 @@ Symulacja 05.10.2026 (100% lustra, bez prawdziwej sondy) dawała górną granic�
 `pair_cap=300` i innym rozkładzie warstw — **nie obowiązuje**; liczby powyżej są wiążące.
 Jak analizować niepełne grupy: `PLAN.md` → sekcja „Niepełne grupy”.
 
+### `layers` — drugi stopień deduplikacji (sieć)
+
+Dla każdego wiersza matrycy: `GET` manifestu amd64 (`arch_digest`) z `mirror.gcr.io`
+(distroless: `gcr.io`), **bez** cache HTTP i **bez** Docker Huba.
+`layer_key = sha256` z listy `digest` warstw (połączonych znakiem nowej linii) z pola
+`layers` manifestu; gdy GET nie zwróci listy warstw → `layer_key = arch_digest` i
+`layer_key_source = arch_digest_fallback`.
+Potem jeden wiersz na `layer_key` (przy kolizji wygrywa `stratum=pairs`, potem bogatszy tag);
+odrzucone `logical_ref` trafiają do `layer_dupes`. `paired` / `triangle` są przeliczane
+w grupach. Zapasu 5% z `select` nie ma — N może lekko spaść, bez automatycznego dobierania.
+
 ## 11. Formaty plików
 
 Wszystkie wyniki to **JSONL**: jeden obiekt JSON na linię, UTF-8, bez znaków ucieczki dla
@@ -727,6 +743,9 @@ Dla wierszy GCR `assign` wypełnia też `digest` i `arch_digest`.
 | `stratum` | `pairs` (porównania) / `descriptive` (tylko opis ekosystemu) |
 | `paired` | grupa ma `standard` i ≥ 1 klasę utwardzoną |
 | `triangle` | grupa ma `standard` i distroless |
+| `layer_key` | po `layers`: hash listy warstw (albo `arch_digest` przy fallbacku) |
+| `layer_key_source` | `layers` / `arch_digest_fallback` |
+| `layer_dupes` | `logical_ref` obrazów usuniętych jako ten sam profil warstw |
 
 Wiersze jednej grupy leżą obok siebie. `matrix_report.json` to podsumowanie przebiegu:
 parametry (`target`, `pair_cap`, `desc_cap`, `seed`), liczba wierszy (łącznie i
@@ -785,5 +804,5 @@ parametry (`target`, `pair_cap`, `desc_cap`, `seed`), liczba wierszy (łącznie 
   proces nadal odpytuje lustro.
 - **Distroless** jest brany tylko jako `latest`; `resolve_gcr_digests` rozwiązuje go w chwili
   uruchomienia `assign`, więc ponowne `assign` po aktualizacji obrazu przez Google da nowy digest.
-- **`Matrix.py layers`** (dedup po liście warstw) nie jest jeszcze zaimplementowany — matryca
-  z `select` jest zdeduplikowana po `arch_digest`, nie po `layer_key`.
+- **`Matrix.py layers`** wymaga sieci; wynik nadpisuje `matrix.jsonl`. Uruchamiać po `select`,
+  przed Krokiem 6.
