@@ -9,6 +9,8 @@ czatu. Źródłem są pliki planów `~/.cursor/plans/fetcher_matrycy_92879bdc.pl
 Rozdział [Rejestry i ścieżki pobierania](#rejestry-i-ścieżki-pobierania) oraz
 [Warianty distroless](#warianty-distroless--dowody-pomiarowe) zawierają **korekty ustaleń
 z 13.09.2026**, zweryfikowane empirycznie. Poprawiają one dwa błędy poprzednich planów.
+Sekcja [Krok 6 — decyzje i przebieg](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy)
+zamyka orkiestrację (kampania 10–11.10.2026) i zbiera wnioski pod pisanie rozdz. 3 i 5–7.
 
 ## Dane oficjalne (APD)
 
@@ -46,14 +48,14 @@ zakresu. Pozostałe punkty albo poprzedzają kod, albo następują po nim.
 | 2. Przegląd narzędzi, kryteria doboru próby | tekst oparty na pomiarach | dane z Kroku 0 i 1 |
 | 3. System orkiestracji | **kod** | Kroki 1, 2, 3, 6 |
 | 4. Projekt i uruchomienie matrycy | **kod** | Kroki 4, 5 |
-| 5. Analiza statystyczna | praca na wynikach | brak — po Kroku 6 |
-| 6. Porównanie metod utwardzania | praca na wynikach | brak — po Kroku 6 |
-| 7. Wnioski, balans bezpieczeństwo/funkcjonalność | praca na wynikach | brak — po Kroku 6 |
+| 5. Analiza statystyczna | praca na wynikach | brak — na `scans.jsonl` |
+| 6. Porównanie metod utwardzania | praca na wynikach | brak — na parach z `scans.jsonl` |
+| 7. Wnioski, balans bezpieczeństwo/funkcjonalność | praca na wynikach | brak — na deltach z pkt 6 |
 
 Wniosek, który warto mieć z tyłu głowy przy planowaniu czasu: **kroki kodu kończą się tam, gdzie
-zaczyna się właściwy ciężar pracy**. Krok 6 produkuje tabelę z liczbami, a punkty 5–7 dopiero
-z niej powstają. Rozbudowywanie skanera ponad to, czego wymaga matryca, nie przybliża do obrony.
-Metody dla punktów 5–7: [Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
+zaczyna się właściwy ciężar pracy**. Krok 6 jest zamknięty (`results/scans.jsonl`); punkty 5–7
+dopiero z tej tabeli powstają. Rozbudowywanie skanera ponad to, czego wymaga matryca, nie
+przybliża do obrony. Metody: [Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
 
 ### Literatura
 
@@ -548,8 +550,10 @@ osobno.
 
 ## Plan analizy statystycznej (punkty 5–7)
 
-Ustalone 01.10.2026. Analiza powstaje po Kroku 6, na tabeli wyników skanu. Wszystkie testy są
-w `scipy.stats` (`wilcoxon`, `friedmanchisquare`, `spearmanr`).
+Ustalone 01.10.2026; wejście po kampanii 11.10.2026: **`results/scans.jsonl`** (9755 wierszy)
+joinowane z matrycą / grupami — przy parach tylko wiersze z `scan_ok` po obu stronach
+(patrz ubytek 168 w [Kroku 6](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy)).
+Wszystkie testy w `scipy.stats` (`wilcoxon`, `friedmanchisquare`, `spearmanr`).
 
 ### Para — jednostka porównania
 
@@ -948,10 +952,10 @@ Stan obecny i co z nim zrobić, w kolejności ważności:
    Tagi gita zostają (`refs/tags/v0.45.1` istnieje), ale plików nie ma. Z 92 opublikowanych wydań
    pozostały `v0.0.1`–`v0.0.5` oraz dopiero `v0.69.2` i nowsze — **cała seria 0.4x zniknęła**.
    `install.sh` zwraca w tej sytuacji kod `1`, więc `docker build` **padał** na tej warstwie
-   (dobra wiadomość: głośno, nie po cichu obrazem bez skanera). Przypięto `v0.74.0`, zweryfikowane
-   jako instalowalne i działające. Do `RUN` dodano `trivy --version`, żeby przyszłe usunięcie
-   wydania było widoczne od razu przy budowaniu. **Użytą wersję trzeba zapisać w pracy**, bo
-   wpływa na wyniki skanów.
+   (dobra wiadomość: głośno, nie po cichu obrazem bez skanera). Najpierw przypięto `v0.74.0`
+   (pilotaż 13.09.2026), potem podbito do **`v0.75.0`** (najnowsze wydanie przed kampanią
+   Kroku 6). Do `RUN` dodano `trivy --version`, żeby przyszłe usunięcie wydania było widoczne
+   od razu przy budowaniu. **Użytą wersję trzeba zapisać w pracy**, bo wpływa na wyniki skanów.
 4. **Dodać `COPY` źródeł** — potrzebne, ale **nie pilne**. Dziś obraz kopiuje tylko
    `requirements.txt`, a kod jest dostępny wyłącznie przez montowanie; `CMD` uruchamia powłokę
    (do 29.09.2026 uruchamiał usunięty `scanner.py`).
@@ -1008,17 +1012,19 @@ albo zapisujemy jego digest wraz z `metadata.json`.
   obrazu**. Część obrazów miałaby wtedy SBOM, a część nie, czyli byłyby mierzone **dwiema różnymi
   metodami** — to zabija porównywalność. Flaga jest opcjonalna i eksperymentalna, więc wystarczy
   jej nie dodawać, ale należy to zapisać jako świadomą decyzję.
-- **Zrównoleglenie — uwaga na konflikt z cache.** Dokumentacja zaleca `--cache-backend memory`
-  do równoległego uruchamiania, ale ten backend **nie utrwala wyników**, więc współdzielone
-  warstwy byłyby analizowane od nowa przy każdym obrazie, co likwiduje główną oszczędność.
-  Osobny `--cache-dir` per worker też nie jest rozwiązaniem, bo każdy katalog ściąga własną kopię
-  bazy (i psuje zamrożenie wersji, o ile nie skopiujemy tam przypiętej bazy). Realne opcje:
-  umiarkowana równoległość na jednym cache'u albo `--cache-backend redis` jako cache wspólny.
-  Nie zrównoleglać bezrefleksyjnie.
-- **`TMPDIR` na pojemnym dysku.** Duże pliki potrzebne do analizy (JAR-y, binaria) Trivy zapisuje
-  tymczasowo na dysk. Obrazy `java` będą generować szczyty zużycia. `TMPDIR` kierujemy na D:
-  i monitorujemy.
-- **Kompresja raportów w locie.** ~10 tys. raportów JSON to 15–20 GB; gzip natychmiast po skanie.
+- **Zrównoleglenie — decyzja Kroku 6 (10.10.2026).** Wspólny BoltDB przy wielu pisarzach
+  ryzykuje korupcję; Redis odpada jako zbędna zależność operacyjna. Wybrane: **12 kontenerów**,
+  każdy z własnym `--cache-dir trivy_cache/w{i}/`, a baza CVE **skopiowana** z jednego
+  `freeze-db` (`--skip-db-update`). Cache warstw nie jest współdzielony — świadomy trade-off
+  (więcej transferu) za wspólne zamrożenie CVE i brak race. Szczegóły przebiegu:
+  [Krok 6 — decyzje i przebieg](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy).
+- **`TMPDIR` musi istnieć w kontenerze.** Trivy tworzy w nim katalog warstw. Ustawienie
+  `TMPDIR=/tmp/trivy` bez `mkdir` powoduje natychmiastowe `FATAL` na każdym obrazie (pierwszy
+  start kampanii). Skrypt robi `mkdir -p /tmp/trivy` przed `Scan.py run`. Na hoście Windows
+  wystarczy `/tmp` w kontenerze; montowanie na D: zostaje opcją przy braku miejsca.
+- **Kompresja raportów w locie.** ~10 tys. raportów JSON → gzip zaraz po skanie
+  (`reports/w{i}/<digest>.json.gz`). Metryki do analizy nie są pełnym JSON-em CVE, tylko
+  jednym wierszem na obraz w `scans.jsonl`.
 
 ## Mikro-kroki
 
@@ -1124,10 +1130,11 @@ prosto z rejestru, bo kilkuset gigabajtów obrazów nie ma gdzie trzymać.
   `feat(fetcher): matryca wielorejestrowa do 10 tys. skanow`
   Szczegóły: [Krok 5 — decyzje i rozpisanie](#krok-5--decyzje-i-rozpisanie).
   Analiza przy niepełnych grupach: [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
-- [ ] **Krok 6 — skaner.** Trivy na `pull_ref` z `--image-src remote`, **baza CVE zamrożona
-  przed startem kampanii** (`--download-db-only`, potem `--skip-db-update`), partie poniżej
-  limitu, resume gdy JSON raportu istnieje. Szczegóły i uzasadnienie:
-  [Architektura kampanii skanowania](#architektura-kampanii-skanowania).
+- [x] **Krok 6 — skaner.** Zamknięty 11.10.2026. Trivy `v0.75.0`, baza CVE zamrożona
+  (`UpdatedAt` 2026-10-10T12:33Z), 12 kontenerów, `scans.jsonl` = **9755** OK + **168**
+  porażek (= 9923). Decyzje, taksonomia błędów i wnioski do rozdziałów:
+  [Krok 6 — decyzje i przebieg](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy).
+  Kod: `src/Scan.py`, `run_scan_workers.ps1`; opis w `KOD.md` §14.
   `feat(scanner): skan pull_ref z resume, image-src remote i zamrozona baza CVE`
 
 ### Krok 5 — decyzje i rozpisanie
@@ -1294,14 +1301,21 @@ stabilnych tagów Javy 17 na `debian12`/`debian13` ani w ogóle Javy 21 i 25 (sp
 
 Aktualny `results/matrix.jsonl` pochodzi z przebiegu **06–07.10.2026** (`select` + `layers`).
 
-#### Stan po przebiegu 07.10.2026
+#### Stan po przebiegu 07.10.2026 (Krok 5)
 
-Ostatni zrobiony krok: `Matrix.py layers` → `results/matrix.jsonl` (**9 923** wierszy z
-`layer_key`) + `matrix_report.json`. **Krok 5 zamknięty.** Następny: Krok 6 (skaner Trivy).
-
-Dane `results/` i `cache/` nie są w gicie. Logi: `results/run_*.log`, `results/probe.log`,
-`results/run_k5_layers.log`. Na Windowsie: `.venv\Scripts\python.exe`. Analiza niepełnych grup:
+`Matrix.py layers` → `results/matrix.jsonl` (**9 923** wierszy z `layer_key`) +
+`matrix_report.json`. **Krok 5 zamknięty 07.10.2026.** Analiza niepełnych grup:
 [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
+
+#### Stan po kampanii 10–11.10.2026 (Krok 6)
+
+`results/scans.jsonl` (**9755** wierszy metryk), `results/scan_failures.jsonl` (**168**),
+`results/db_snapshot/metadata.json`, raporty `reports/w{i}/*.json.gz`. **Krok 6 zamknięty.**
+Następne: punkty APD 5–7 na `scans.jsonl` (bez dalszego kodu orkiestracji). Szczegóły:
+[Krok 6 — decyzje i przebieg](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy).
+
+Dane `results/`, `reports/`, `trivy_cache/` i `cache/` nie są w gicie. Na Windowsie:
+`.venv\Scripts\python.exe`; kampania w obrazie `cia-scanner`.
 
 #### Wznowienie pracy na innym komputerze (stan 05.10.2026 — historyczne)
 
@@ -1334,6 +1348,169 @@ zmianę; bez trailera `Co-authored-by: Cursor` w commitach (w razie potrzeby usu
 - **Wiersze bez linii OS** (40% `library/`) — nie są odrzucane, tylko nie parują się
   z distroless. Uzupełnienie linii z wyniku skanu (Trivy podaje OS) jest możliwe po Kroku 6.
 
+### Krok 6 — decyzje, przebieg kampanii i wnioski do pracy
+
+Ustalenia z planowania i uruchomienia 08–11.10.2026. To materiał do rozdz. 3 (narzędzie),
+rozdz. 2 (ograniczenia próby po skanie) i wstępu do rozdz. 5 (dane wejściowe analizy).
+
+#### Decyzje projektowe (przed startem)
+
+1. **Jednostka równoległości = kontener Dockera**, nie proces na hoście. Matryca dzielona
+   na 12 plików `matrix_part_*.jsonl` (kolejne kawałki, bez round-robin i bez balansowania
+   obciążenia — prostota ważniejsza niż idealny czas wall-clock). Każdy kontener dostaje
+   jedną część, własny `trivy_cache/w{i}/` i zapisuje `metrics_part_i` + `reports/w{i}/`.
+2. **Scalenie po kampanii** → jeden czytelny `results/scans.jsonl` (ten sam format co matryca).
+   Parquet odrzucony jako zbędna zależność (`pyarrow`); CSV odrzucony przez dwukropki w
+   `logical_ref` i niespójność z resztą potoku. Pandas: `pd.read_json(..., lines=True)`.
+3. **Resume po pliku raportu**, nie SQLite `lab.db`. Jeśli `reports/w{i}/<digest>.json.gz`
+   da się odczytać, obraz jest pomijany; brakujący wiersz metryk jest wtedy odtwarzany z
+   raportu (odzyskanie po przerwaniu zaraz po gzip).
+4. **Trivy `v0.75.0`** — najnowsze wydanie z GitHub Releases w dniu budowy obrazu (08.10 /
+   10.10.2026). Pilotaż 13.09 był na `v0.74.0`; w pracy podać wersję kampanii, nie pilotażu.
+5. **Pełne JSON-e CVE zostają w `reports/`**; do analizy idzie tylko wiersz metryk
+   (`cve_total`, severity, `pkg_count`, `has_shell` / `has_apt` / `has_apk` / `has_busybox`
+   + pola matrycy). To zamyka dług PoC o 5 mln wierszy w RAM bez wprowadzania Parquet.
+
+#### Przebieg operacyjny (10–11.10.2026)
+
+```
+docker build -t cia-scanner .
+docker run ... python src/Scan.py freeze-db    # ~9 min: baza + kopia do w0..w11
+python src/Scan.py split --parts 12            # 11×827 + 1×826 = 9923
+.\run_scan_workers.ps1                         # ~9,3 h wall-clock, potem merge
+```
+
+| Artefakt | Wartość |
+| --- | --- |
+| Trivy | `v0.75.0` |
+| Baza CVE `UpdatedAt` | 2026-10-10T12:33:35Z |
+| Baza CVE `DownloadedAt` | 2026-10-10T17:03:38Z |
+| Snapshot | `results/db_snapshot/metadata.json` + `trivy.db.sha256` |
+| Start workerów | 2026-10-10 ~17:24Z |
+| Koniec ostatniego workera / merge | 2026-10-11 ~02:42Z |
+| Sukces | **9755** (`scans.jsonl`) |
+| Porażki | **168** (`scan_failures.jsonl`) |
+| Pokrycie | 9755 + 168 = **9923** (cała matryca) |
+
+**Ubytek względem matrycy (po klasie):**
+
+| Klasa | Matryca | Skan OK | Porażki |
+| --- | --- | --- | --- |
+| `standard` | 6361 | 6223 | 138 |
+| `slim` | 1699 | 1683 | 16 |
+| `alpine` | 1808 | 1794 | 14 |
+| `distroless` | 55 | **55** | **0** |
+| warstwa `pairs` | 5469 | 5406 | 63 |
+| warstwa `descriptive` | 4454 | 4349 | 105 |
+
+Distroless przeszedł w całości — ważne przy studium przypadku z pkt 6. Porażki są
+skoncentrowane w `standard` i w warstwie opisowej (starsze / rzadsze tagi).
+
+**Szkic rozkładu CVE w `scans.jsonl` (orientacja przed rozdz. 5; nie wynik końcowy):**
+
+| Klasa | N | mediana CVE | Q1–Q3 |
+| --- | --- | --- | --- |
+| `standard` | 6223 | 595 | 185–1835 |
+| `slim` | 1683 | 366 | 203–517 |
+| `alpine` | 1794 | 98 | 36–183 |
+| `distroless` | 55 | 70 | 33–138 |
+
+Mediana globalna CVE ≈ 374, mediana pakietów ≈ 174, `has_shell` ≈ 97% obrazów (distroless
+i część minimalnych alpine bez powłoki tłumaczą resztę). Porządek median klas jest zgodny
+z intuicją pilotażu i z pytaniem badawczym — formalne testy to dopiero pkt 5–6 na parach.
+
+#### Wpadki operacyjne (zachować jako lekcje, nie jako wynik naukowy)
+
+1. **Docker Desktop wyłączony** na starcie — kampania wymaga działającego demona; to nie
+   DooD (gniazdo nie jest montowane), ale host i tak musi mieć Dockera do kontenera orkiestrującego.
+2. **`TMPDIR=/tmp/trivy` bez katalogu** — pierwszy przebieg wygenerował tysiące fałszywych
+   porażek w sekundy. Wyczyszczono `failures_part_*`, poprawiono skrypt (`mkdir -p`),
+   restart od zera. Wniosek do rozdz. 3: ścieżki tymczasowe Trivy trzeba tworzyć jawnie.
+3. **PowerShell `$ErrorActionPreference = Stop` + logi na stderr** — `docker rm` nieistniejącego
+   kontenera oraz `INFO` z `Scan.py merge` leciały jako `NativeCommandError` i zabijały skrypt
+   po udanych workerach. Merge odpalono ręcznie; skrypt zabezpieczony. To szczegół Windows,
+   nie metodyki skanowania.
+4. **Nierówne tempo części** — prosty podział kolejnych wierszy matrycy dał „ciężkie” shardy
+   (dużo Javy / dużych obrazów w części 10–11). Wall-clock ≈ czas najwolniejszego workera
+   (~9 h). Round-robin skróciłby ogon, ale nie był potrzebny do poprawności wyniku.
+
+#### Wyjaśnienie 168 porażek (do ograniczeń rozdz. 2 / 5)
+
+Porażka = Trivy zakończył się kodem ≠ 0 (albo limitem czasu); kampania **nie** zatrzymywała
+się na pierwszym błędzie — każda trafiała do `scan_failures.jsonl` z `logical_ref`,
+`pull_ref` i treścią `FATAL`. To nie są „braki w kodzie skanera”, tylko obrazy, których
+Trivy `v0.75.0` nie zdołał przeanalizować przez `mirror.gcr.io` / rejestr w warunkach
+kampanii. **Żaden z 55 obrazów distroless nie padł.**
+
+Klasyfikacja po treści błędu (wzajemnie rozłączne, w tej kolejności dopasowania):
+
+| Klasa | N | % z 168 | Co się stało | Dlaczego tak bywa | Przykłady |
+| --- | --- | --- | --- | --- | --- |
+| **Nieobsługiwany artefakt** (`unsupported artifact type` / `application/octet-stream`) | **53** | 32% | Manifest na lustrze odpowiada, ale Trivy nie uznaje go za obraz kontenerowy do skanu. | **Wyłącznie tagi z 2016** (golang 1.5, node 4.x, java 7/8/9 sprzed er OCI). Stary format dystrybucji; współczesny skaner ich nie otwiera. Sonda Kroku 5 widziała `hit` na manifeście — dostępność ≠ skanowalność. | `golang:1.5`, `node:4.5`, `java:9-b13x` |
+| **Pobranie / analiza warstwy** (`failed to get the layer`, `analyze layer`, …) | **35** | 21% | Manifest jest, ale stream warstwy urywa się albo treść warstwy nie daje się zanalizować. | Mieszanka: duże/złożone obrazy, chwilowe problemy lustra, nietypowe warstwy. Część z 2026 (`gradle` jdk21, `ghost`) — nie tylko „muzeum”. | `docker:19.03.14`, `gradle:9.2.1-jdk21-noble` |
+| **`BLOB_UNKNOWN`** | **23** | 14% | Manifest wskazuje digest bloba, którego rejestr/lustro nie ma. | Klasyczna dziura pull-through: indeks/manifest w cache, blob już nie (albo nigdy nie był). Dużo **debian** z 2023 i okolic (`buster`/`bullseye` pinowane datą). Sonda sprawdzała manifest, nie każdy blob. | `debian:buster-20201209-slim`, `debian:oldstable-20230202` |
+| **Timeout Trivy** (`context deadline exceeded`, ~5 min w logu) | **23** | 14% | Skan zaczął się, ale nie skończył w limicie wewnętrznym klienta. | Niemal same ciężkie edycje **`sonarqube` (*-enterprise / datacenter)** + kilka `silverpeas` / `mongo`. Nasz timeout 600 s prawie nie wchodził — pada limit Trivy wcześniej. To koszt analizy dużych obrazów Java, nie „zły digest”. | `sonarqube:2026.4.1-enterprise`, `silverpeas:6.x` |
+| **HTTP 404 przy dociągnięciu** | **17** | 10% | Żądanie do lustra (często ścieżka artifacts-downloads) wraca 404. | Spójne z wcześniejszym wnioskiem o dziurach `mirror.gcr.io`: sonda `HEAD` na manifeście przeszła, a konkretny blob/artefakt przy skanie już nie. Skupione w **`nextcloud`** i **`wordpress`**. | `nextcloud:…`, `wordpress:7.1-…` |
+| **Ekstrakcja pliku z warstwy** (`walk error` / `failed to extract` / otwarcie `.so`) | **6** | 4% | Warstwa się pobiera, ale rozpakowanie lub odczyt pliku w środku kończy się błędem. | Nietypowe binaria / uszkodzony tar w warstwie (np. duże `sys.so` w Julii). | `julia:1.7.3-buster`, `rust:1.37.0-stretch` |
+| **`unexpected EOF`** | **5** | 3% | Połączenie urywa się w połowie archiwum warstwy. | Błąd transportu / niekompletna odpowiedź lustra — losowy względem klasy utwardzenia. | `nginx:1.18.0`, `tomcat:9.0.0.M26` |
+| **Inne init** | **6** | 4% | `unable to initialize` bez powyższych wzorców. | Resztki brzegowe (m.in. świeże `golang:tip-…`). | `golang:tip-20260913-bookworm` |
+
+**Jak to tłumaczyć w pracy (trzy akapity myślowe):**
+
+1. *Ubytek nie jest losowy względem wieku.* Co trzecia porażka to obrazy z **2016**, których
+   Trivy w ogóle nie traktuje jako skanowalnego obrazu — to ograniczenie narzędzia wobec
+   historycznego korpusu Official Images, nie wynik utwardzania.
+2. *Sonda lustra ≠ gwarancja skanu.* `mirror_probe=hit` oznaczał dostępny **manifest** amd64.
+   Przy skanie Trivy ciągnie **warstwy/bloby**; stąd `BLOB_UNKNOWN` i 404 przy digestach,
+   których lustro nie trzyma. To trzeba zapisać obok decyzji „tylko lustro” z 05.10.
+3. *Timeouty to osobna klasa kosztu, nie „brak obrazu”.* Edycje enterprise SonarQube są w
+   matrycy jako `standard` descriptive/pairs, ale ich skan przekracza praktyczny limit czasu
+   klienta — przy ponowieniu można podnieść timeout albo wyłączyć je z próby z jawnym
+   uzasadnieniem; nie mieszać ich z `BLOB_UNKNOWN`.
+
+**Wpływ na punkty 5–7:**
+
+- 168/9923 ≈ **1,7%** — opis ekosystemu (pkt 5) prawie nie cierpi; rozkład klas w
+  `scans.jsonl` jest bliski matrycy (distroless bez strat).
+- Przy **parach** (pkt 6–7) jednostka wchodzi do testu tylko gdy baseline `standard` **i**
+  wariant utwardzony mają wiersz w `scans.jsonl`. Inner-join po `group_id` / `arch_digest`
+  i raport: ile par `slim`/`alpine`/`distroless` odpadło przez porażkę którejś strony.
+- Porażki są w większości `standard` (138) i warstwy `descriptive` — ubytek par jest mniejszy
+  niż 168 sugeruje na pierwszy rzut oka, ale trzeba go policzyć, nie zgadywać.
+
+**Czego nie robić:** doskanowywać porażek z Docker Huba „żeby domknąć N” (łamie decyzję
+05.10 i ścieżkę `pull_ref`). Ponowny przebieg tych 168 **przez to samo lustro** jest
+dopuszczalny (np. dłuższy timeout dla SonarQube), ale nieobowiązkowy, jeśli ubytek par
+zostanie opisany. Lista `scan_failures.jsonl` zostaje załącznikiem / materiałem do ograniczeń.
+
+#### Co z długu PoC zostało zamknięte
+
+| Wymaganie z PoC | Stan po Kroku 6 |
+| --- | --- |
+| `timeout` + sprawdzenie `returncode` | tak (`Scan.py`, 600 s) |
+| `--image-src remote` | tak |
+| `--list-all-pkgs` + metryki powłoki/apk/apt | tak |
+| bez cichych porażek | tak — każda w `scan_failures.jsonl` |
+| nie ładować milionów wierszy CVE do RAM | tak — metryki JSONL, pełne raporty na dysku |
+| zamrożona baza CVE | tak — snapshot w `db_snapshot/` |
+| pin `requirements.txt` | tak (`requests` / `requests_cache` / `python-dotenv`) |
+| `pyarrow` / Parquet | **świadomie nie** — zastąpione `scans.jsonl` |
+| `COPY` źródeł w Dockerfile | nadal nie (mount); przed rozdziałem o narzędziu |
+
+#### Zdania gotowe do pracy
+
+- *Kampanię przeprowadzono skanerem Trivy w wersji 0.75.0 przy zamrożonej bazie podatności
+  (`UpdatedAt` 10.10.2026); wszystkie obrazy oceniano względem tej samej bazy.*
+- *Skanowanie realizowano w dwunastu równoległych kontenerach bez montowania gniazda Dockera
+  hosta (`--image-src remote`), zgodnie z zasadą izolacji opisaną w rozdziale o architekturze.*
+- *Z 9923 obrazów matrycy uzyskano wynik dla 9755 (98,3%). Spośród 168 nieudanych skanów
+  największą grupę (53) stanowiły bardzo stare artefakty z 2016 r., których Trivy nie
+  obsługuje jako obrazów OCI/Docker; kolejne wynikały z braków blobów na lustrze, limitów
+  czasu przy dużych obrazach Java oraz błędów pobrania warstw. Klasa distroless została
+  przeskanowana w całości (55/55).*
+- *Do analizy ilościowej wykorzystano tabelę metryk (`scans.jsonl`); pełne raporty JSON
+  pozostają archiwum dowodowym i nie są wczytywane hurtowo do pamięci.*
+
 ### Cel akceptacji
 
 - Matryca zawiera kolumny z sekcji [Schemat matrycy testowej](#schemat-matrycy-testowej).
@@ -1362,37 +1539,32 @@ z Kroku 6**:
   `urllib3.Retry(total=5, backoff_factor=1.5, status_forcelist=[429,500,502,503,504],
   respect_retry_after_header=True)` i timeouty `(connect=10, read=30)`).
 - PoC budował DataFrame z listy wszystkich rekordów naraz. 75 obrazów dało 39,5 tys. wierszy,
-  więc 10 tys. obrazów da ~5 mln wierszy i wyczerpie RAM. Potrzebny zapis przyrostowy do Parquet.
-- Skan musi używać `--list-all-pkgs`, co da liczbę pakietów oraz wykrycie
-  `bash`/`busybox`/`apt`/`apk` — to metryka funkcjonalności do pkt 7.
-- Skan musi przekazywać `--image-src remote`; PoC tego nie robił, więc Trivy odpytywał najpierw
-  demona hosta i ściągał obrazy do lokalnego storage Dockera — źródło zaśmiecania maszyny.
-- `Dockerfile` nie zawiera `COPY` źródeł — kod działa wyłącznie z montowania. Szczegóły
-  i priorytety: [Zmiany w `Dockerfile`](#zmiany-w-dockerfile).
-- `requirements.txt` zawiera już tylko zależności fetchera (`requests`, `requests_cache`,
-  `python-dotenv`), wciąż bez przypiętych wersji; do przypięcia wszystkie, a przy Kroku 6
-  do dołożenia `pyarrow`.
+  więc 10 tys. obrazów da ~5 mln wierszy i wyczerpie RAM. **Rozwiązane inaczej niż Parquet:**
+  pełne raporty na dysku (`reports/*.json.gz`), do analizy jeden wiersz metryk na obraz
+  (`scans.jsonl`).
+- Skan musi używać `--list-all-pkgs` — zamknięte w `Scan.py`.
+- Skan musi przekazywać `--image-src remote` — zamknięte.
+- `Dockerfile` nadal bez `COPY` źródeł (mount); termin: przed rozdziałem o narzędziu.
+- `requirements.txt` — wersje przypięte przy Kroku 6; `pyarrow` nie dodano (decyzja JSONL).
 
 ### Rozmiar danych i dysk
 
-Przy 10 tys. obrazów: ~15–20 GB surowego JSON-a (obecnie 75 raportów = ~130 MB, sam
-`report_iojs.json` ma 12 MB). Dysk w chwili planowania: C: 178 GB wolnego, D: 715 GB;
-`reports/` 115 MB, `trivy_cache/` 2,3 GB.
-
-Kluczowe: obrazy badane **nie trafiają na dysk hosta ani do lokalnego storage Dockera** —
-zostają tylko raporty i cache analizy. Wybór trybu pobierania omawia
-[Architektura kampanii skanowania](#architektura-kampanii-skanowania).
+Po kampanii 10–11.10.2026: **9755** raportów gzip w `reports/w{i}/` plus 12 katalogów
+`trivy_cache/w*` z kopiami bazy (~1,3 GB `trivy.db` × worker przy seedzie; cache warstw
+rośnie w trakcie). Obrazy badane **nie** lądują w lokalnym storage Dockera hosta — zostają
+raporty i cache analizy. Szczegóły: [Architektura kampanii](#architektura-kampanii-skanowania),
+[przebieg Kroku 6](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy).
 
 ## Stan repozytorium
 
 Repozytorium zawiera `Dockerfile` (środowisko Trivy), `requirements.txt`, dokumentację
 w `docs/` (ten plan i opis kodu [`KOD.md`](KOD.md)) oraz fetcher w `src/`: `hub_http.py` (wspólny klient HTTP), `GetRepo.py` (Kroki 1 i 2),
 `GetTags.py` (Krok 3), `Classify.py` (Krok 4: `classify`, `assign`, `probe-tags`) i `Matrix.py`
-(Krok 5: `candidates`, `select`, `layers`). Wyniki
-(`results/`) i cache (`cache/`) nie są wersjonowane — są odtwarzalne z kodu i pinowanych
-digestów. PoC `scanner.py` został usunięty (commit `57ef163`); jego błędy są spisane jako
-[wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6). **Kroki 1–5 zamknięte**;
-następny jest Krok 6 (skaner).
+(Krok 5: `candidates`, `select`, `layers`) oraz skaner `Scan.py` (Krok 6: `freeze-db`,
+`split`, `run`, `merge`). Wyniki (`results/`) i cache (`cache/`) nie są wersjonowane — są
+odtwarzalne z kodu i pinowanych digestów. PoC `scanner.py` został usunięty (commit `57ef163`);
+jego błędy są spisane jako
+[wymagania dla Kroku 6](#dług-techniczny-poc--wymagania-dla-kroku-6). **Kroki 1–6 zamknięte** (kampania 10–11.10.2026 → `results/scans.jsonl`).
 
 ### Implementacja fetchera z sierpnia — wątek zamknięty
 
