@@ -5,7 +5,6 @@ Narzędzie badawcze do **pracy inżynierskiej** na Politechnice Wrocławskiej.
 | | |
 | --- | --- |
 | **Autor** | Kamil Wierzbicki |
-| **Promotor** | mgr inż. Jakub Tomaszewski |
 | **Tytuł** | Analiza porównawcza metod utwardzania środowisk kontenerowych pod kątem bezpieczeństwa i optymalizacji powierzchni ataku |
 
 Cel: porównać klasy baz kontenerowych (**standard / slim / alpine / distroless**) pod kątem CVE, rozmiaru i funkcjonalności runtime — oraz sformułować rekomendacje doboru obrazów bazowych.
