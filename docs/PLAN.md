@@ -54,8 +54,10 @@ zakresu. Pozostałe punkty albo poprzedzają kod, albo następują po nim.
 
 Wniosek, który warto mieć z tyłu głowy przy planowaniu czasu: **kroki kodu kończą się tam, gdzie
 zaczyna się właściwy ciężar pracy**. Krok 6 jest zamknięty (`results/scans.jsonl`); punkty 5–7
-dopiero z tej tabeli powstają. Rozbudowywanie skanera ponad to, czego wymaga matryca, nie
-przybliża do obrony. Metody: [Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
+dopiero z tej tabeli powstają (`src/Analyze.py` → `figures/` + `analysis_summary.json`).
+Rozbudowywanie skanera ponad to, czego wymaga matryca, nie przybliża do obrony. Kanoniczny
+przepis analizy i wykresów pod rozdz. 5–7:
+[Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
 
 ### Literatura
 
@@ -550,71 +552,173 @@ osobno.
 
 ## Plan analizy statystycznej (punkty 5–7)
 
-Ustalone 01.10.2026; wejście po kampanii 11.10.2026: **`results/scans.jsonl`** (9755 wierszy)
-joinowane z matrycą / grupami — przy parach tylko wiersze z `scan_ok` po obu stronach
-(patrz ubytek 168 w [Kroku 6](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy)).
-Wszystkie testy w `scipy.stats` (`wilcoxon`, `friedmanchisquare`, `spearmanr`).
+Ustalone 01.10.2026; zaktualizowane 11.10.2026 po kampanii i uruchomieniu `src/Analyze.py`.
+Ten rozdział jest **kanonicznym przepisem** na rozdziały 5–7 pracy: co liczymy, na jakiej
+próbie, jakim testem, jaki wykres trafia do tekstu.
 
-### Para — jednostka porównania
+### Narzędzie i artefakty
 
-Para to dwa obrazy **tej samej technologii, w tej samej wersji i na tej samej bazie**, różniące
-się tylko metodą utwardzenia. Grupa z matrycy (Krok 5):
+| Element | Wartość |
+| --- | --- |
+| Skrypt | `src/Analyze.py` (matplotlib Agg, bez notebooka) |
+| Wejście | `results/scans.jsonl` — 9755 wierszy `scan_ok` (pola matrycy + metryki Trivy) |
+| Wyjście wykresów | `figures/*.png` |
+| Wyjście liczb | `results/analysis_summary.json` |
+| Biblioteki | `pandas`, `numpy`, `scipy.stats`, `matplotlib` |
+| Uruchomienie | `python src/Analyze.py` (opcjonalnie `--in`, `--out-dir`, `--summary`) |
+
+Pełne raporty CVE (`reports/w{i}/*.json.gz`) **nie** wchodzą do analizy hurtowo — tylko
+zagregowane metryki z `scans.jsonl`. Baza CVE zamrożona: Trivy `v0.75.0`,
+`UpdatedAt` 2026-10-10T12:33Z (rozdz. 3 / metodyka).
+
+### Dane wejściowe — pola używane w analizie
+
+Z każdego wiersza `scans.jsonl`:
+
+| Grupa | Pola | Rola |
+| --- | --- | --- |
+| Identyfikacja | `logical_ref`, `group_id`, `repo_key`, `family`, `variant`, `os_line`, `stratum` | grupowanie, pary, opisy |
+| Bezpieczeństwo | `cve_total`, `cve_critical`, `cve_high`, `cve_medium`, `cve_low`, `cve_with_fix` | pkt 5–6 |
+| Powierzchnia | `arch_size` → `arch_size_mb`, `pkg_count`, `cve_density = cve_total/pkg_count` | pkt 5–7 |
+| Funkcjonalność | `has_shell`, `has_busybox`, `has_apt`, `has_apk` | pkt 7 |
+| Świeżość | `tag_last_pushed` (tylko Hub; **nie** `created` z configu distroless) | pkt 5 |
+| Rejestr | `source_registry`, `registry` | filtry (wiek tagu = Hub) |
+
+**Próba punktów:**
+
+| Punkt APD | Które wiersze |
+| --- | --- |
+| 5 (ekosystem) | **wszystkie** 9755 skanów OK, w tym `stratum=descriptive` i samotne `standard` |
+| 6–7 (metody) | wyłącznie **pary** zbudowane jak niżej; warstwa `descriptive` nie wchodzi |
+
+### Para — jednostka porównania (dokładna definicja)
+
+Para = dwa obrazy z **tym samym `group_id`**, różniące się tylko `variant`:
+`{slim|alpine|distroless}` vs `standard`, **oba** obecne w `scans.jsonl`.
+
+Przykład grupy:
 
 | Obraz | Klasa |
 | --- | --- |
-| `python:3.13.15-trixie` | `standard` — punkt odniesienia |
+| `python:3.13.15-trixie` | `standard` — baseline |
 | `python:3.13.15-slim-trixie` | `slim` |
 | `python:3.13.15-alpine3.23` | `alpine` |
 | `gcr.io/distroless/python3-debian13` | `distroless` |
 
-daje trzy pary: `slim`–`standard`, `alpine`–`standard`, `distroless`–`standard`. Dla każdej
-liczymy deltę metryki.
+→ trzy pary: `slim`–`standard`, `alpine`–`standard`, `distroless`–`standard`.
 
-Para jest potrzebna, bo **średnie klas nie są porównywalne**. Do `standard` wpadają `wordpress`,
-`archlinux` czy `gradle`, do `alpine` inny zestaw technologii — różnica średnich mierzyłaby
-skład klasy, nie utwardzenie (paradoks Simpsona). W parze technologia i wersja są stałe.
-Porównań średnich klas **nie wykonujemy**.
+**Join tylko po `group_id`.** Nie łączyć po `os_line` ani `repo_key`: w jednej grupie alpine
+ma linię `alpineX.Y`, a standard `debianN`; distroless ma `repo_key` z przestrzeni
+`distroless/*`, partner Hub ma `library/...`. Błąd join po tych polach rozbija pary
+(zaobserwowane przy pierwszym przebiegu Analyze: alpine 418 zamiast ~1300, distroless 0).
 
-### Dane z jednego skanu
+Dla Wilcoxona na poziomie repozytorium czynnikiem grupującym jest **`repo_key` partnera
+`standard` z Huba** (nie ścieżka distroless).
 
-- **Bezpieczeństwo:** liczba CVE łącznie i per severity (`CRITICAL` / `HIGH` / `MEDIUM` /
-  `LOW`), CVE z dostępną poprawką, gęstość CVE na pakiet.
-- **Powierzchnia ataku:** rozmiar obrazu (`arch_size` z API Huba), liczba pakietów.
-- **Funkcjonalność:** obecność powłoki (`bash`, `sh`, `busybox`), menedżera pakietów
-  (`apt`, `apk`), narzędzi diagnostycznych.
+**Dlaczego pary, nie średnie klas.** Do `standard` wpadają inne technologie niż do `alpine`
+— różnica średnich mierzyłaby skład klasy, nie utwardzenie (paradoks Simpsona).
+**Porównań średnich klas globalnie nie wykonujemy** (boxploty per klasa w pkt 5 są
+**opisem ekosystemu**, nie testem metod).
+
+### Formuły delt (pkt 6–7)
+
+Dla metryki \(M \in \{\texttt{cve\_total},\ \texttt{pkg\_count},\ \texttt{arch\_size\_mb}\}\):
+
+\[
+\Delta M = M_{\text{utwardzony}} - M_{\text{standard}}
+\]
+
+\[
+\Delta\% M = \frac{\Delta M}{M_{\text{standard}}} \quad\text{gdy } M_{\text{standard}} > 0;\ \text{inaczej NaN}
+\]
+
+Na wykresach pkt 7 oś „redukcja” = \(-\Delta\%\) (dodatnia = poprawa względem standard).
+
+**Agregat per repozytorium** (jedna obserwacja niezależna do głównego testu):
+
+\[
+\text{dla każdego }(\texttt{repo\_key},\ \texttt{variant}):\quad
+\text{mediana}\{\Delta,\ \Delta\%\}\ \text{po parach z tego repo}
+\]
+
+### N po joinie skanów (11.10.2026, obowiązujące)
+
+| Zbiór | N | Uwaga |
+| --- | --- | --- |
+| Skan OK łącznie | 9755 | z 9923 w matrycy; 168 porażek |
+| standard / slim / alpine / distroless | 6223 / 1683 / 1794 / **55** | distroless bez strat |
+| Pary slim / alpine / distroless | **1507 / 1315 / 40** | obie strony `scan_ok` |
+| Repo z parą (obs. do Wilcoxona) | **21 / 53 / 4** | 1 repo = 1 mediana delt |
+| Grupy Friedman `standard+slim+alpine` | **300** | obie klasy + baseline zeskanowane |
+
+Ubytek slim/alpine względem matrycy (1529→1507, 1336→1315) jest zgodny z porażkami
+skanu po stronie `standard` lub wariantu.
+
+**Distroless — dwie liczby, nie sprzeczność.** Matryca liczyła **27 grup** mających
+`standard`+≥1 distroless. Analyze łączy **każdy wiersz** distroless z `standard` o tym
+samym `group_id` → **40 par obrazów**. Różnica wynika z mapowania `static` / `base` /
+`base-nossl` / `cc` na partnera `library/debian`: kilka obrazów distroless dzieli jeden
+`group_id` z jednym `debian:N` (np. 4 distroless na `library/debian:13.7:-:debian13`).
+W rozdz. 6 podawać **obie**: 40 par obrazów / 27 grup (po weryfikacji unikalnych
+`group_id`), a Wilcoxon per-repo i tak zwija to do **4** `repo_key` partnera
+(`python`, `node`, `openjdk`, `debian`). Szczegóły 168 porażek:
+[Krok 6](#krok-6--decyzje-przebieg-kampanii-i-wnioski-do-pracy).
 
 ### Punkt 5 — wielowymiarowa analiza podatności (cała matryca)
 
-- **Statystyki opisowe per klasa:** mediana, kwartyle, rozstęp CVE, rozmiaru i liczby pakietów.
-  Mediana zamiast średniej, bo rozkład CVE jest skrajnie skośny (pilotaż: 3 612 vs 20).
-- **Korelacja Spearmana** CVE z rozmiarem i liczbą pakietów — czy większy obraz to więcej CVE.
-  Spearman, bo zależności nie są liniowe, a dane mają wartości skrajne.
-- **Świeżość bazy:** CVE względem linii systemu (`debian9`…`debian13`) i `tag_last_pushed`.
-  Pilotaż pokazał, że świeżość bazy potrafi przeważyć liczbę pakietów.
-- **Rozkład severity** per klasa — udział `CRITICAL` i `HIGH`.
+**Cel w pracy:** opisać ekosystem oficjalnych obrazów i tło pod porównania metod; tu wolno
+używać obrazów bez pary.
 
-Tu wchodzą też obrazy bez pary — dają obraz całego ekosystemu oficjalnych obrazów.
+| # | Co robimy | Jak | Wykres / tabela | Plik |
+| --- | --- | --- | --- | --- |
+| 5.0 | Liczebności | N per `variant`, `stratum`; porównanie z matrycą | tabela w rozdz. 5 | `analysis_summary.json` → `n_by_variant` |
+| 5.1 | Opis CVE per klasa | mediana, Q1–Q3 (nie średnia — skośność) | boxplot, oś Y log | `figures/5_1_cve_by_variant.png` |
+| 5.2 | Powierzchnia ataku | boxplot `arch_size_mb` i `pkg_count` per klasa | 2 panele | `figures/5_2_size_pkg_by_variant.png` |
+| 5.3 | Severity | udział CRITICAL/HIGH/MEDIUM/LOW w sumie CVE klasy | stacked bar 100% | `figures/5_3_severity_share.png` |
+| 5.4 | CVE vs rozmiar | scatter, kolor = klasa | scatter | `figures/5_4_cve_vs_size.png` |
+| 5.5 | CVE vs pakiety | j.w. | scatter | `figures/5_5_cve_vs_pkg.png` |
+| 5.4–5.5 test | Zależność | Spearman \(\rho\) `cve_total`↔`arch_size_mb` oraz ↔`pkg_count` | liczby w tekście | `spearman` w summary |
+| 5.6 | Świeżość bazy OS | boxplot CVE dla `os_line` zaczynających się od `debian` | boxplot log | `figures/5_6_cve_by_debian_line.png` |
+| 5.7 | Świeżość tagu | tylko `source_registry=hub`; wiek = dni wstecz od max `tag_last_pushed` w próbie | scatter | `figures/5_7_cve_vs_age.png` |
+
+**Wynik orientacyjny (pierwszy przebieg Analyze, do cytowania po weryfikacji w summary):**
+mediana CVE: standard 595, slim 366, alpine 98, distroless 70; Spearman rozmiar
+\(\rho\approx 0{,}57\), pakiety \(\rho\approx 0{,}60\) (oba \(p\approx 0\)).
+
+**Teza do rozwinięcia w rozdz. 5 (z pilotażu):** mniej pakietów nie gwarantuje mniej CVE —
+świeżość linii Debiana bywa silniejsza niż sama liczba komponentów.
+
+**Uwaga:** `arch_size` dla części distroless (GCR) bywa puste → mediana rozmiaru NaN;
+w tekście nie twierdzić o rozmiarze distroless z API Huba bez uzupełnienia źródła.
 
 ### Punkt 6 — porównanie metod utwardzania (tylko pary)
 
-- **Delta względna:** `(CVE_utwardzony − CVE_standard) / CVE_standard`; to samo dla rozmiaru
-  i liczby pakietów. Względna, bo spadek o 200 CVE znaczy co innego przy 300 i przy 3 600.
-- **Test Wilcoxona dla par** (*signed-rank*), osobno dla `slim`, `alpine`, `distroless`:
-  czy obraz utwardzony ma systematycznie mniej CVE niż jego `standard`. Nieparametryczny
-  odpowiednik testu t dla par — dane nie mają rozkładu normalnego.
-- **Wielkość efektu:** mediana delt z przedziałem ufności. Przy tysiącach par test prawie
-  zawsze wyjdzie istotny, więc ważniejsze jest *o ile* spada liczba CVE.
-- **Zależność obserwacji.** Pary z jednego repozytorium nie są niezależne (np. 783 pary `slim`
-  z zaledwie 25 repozytoriów). Główny test wykonujemy na **medianach delt per repozytorium** —
-  jedno repozytorium = jedna obserwacja. Wynik na wszystkich parach raportujemy pomocniczo.
-- **Porównanie metod między sobą:** **test Friedmana** na grupach z kompletem wariantów
-  (pomiary powtarzane, bez założenia normalności) — np. czy `alpine` redukuje CVE bardziej
-  niż `slim`. Główny kontrast metod to grupy `alpine`+`slim`+`standard` (bez wymogu
-  distroless). Pełny czworokąt z distroless jest za rzadki na filar wnioskowania — patrz
-  [Niepełne grupy](#niepełne-grupy--jak-analizować-w-inżynierce).
-- **Distroless jako studium przypadku.** Po przebiegu 06.10.2026: **27 par** w 4 technologiach
-  (`python`, `node`, `openjdk`, `debian`) — za mało na mocne uogólnienie. Tabela delt per
-  technologia i linia Debiana, bez przedstawiania tego jako reprezentatywnej próby ekosystemu.
+**Cel:** czy i o ile `slim` / `alpine` / `distroless` mają mniej CVE niż sparowany `standard`.
+
+| # | Co robimy | Hipoteza / metoda | Wykres | Plik |
+| --- | --- | --- | --- | --- |
+| 6.1 | Rozkład \(\Delta\%\) CVE | opisowy, per metoda | violin/box \(\Delta\%\times 100\) | `figures/6_1_delta_cve_pct.png` |
+| 6.2 | **Główny wynik** | Wilcoxon signed-rank, `alternative="less"` na **medianach \(\Delta\) CVE per `repo_key`**; H₁: mediana \(\Delta < 0\). Wielkość efektu: mediana \(\Delta\%\) + CI 95% (bootstrap 2000, seed 2026) | forest (punkt + CI) | `figures/6_2_forest_repo_effect.png` |
+| 6.2b | Wynik pomocniczy | ten sam Wilcoxon na **wszystkich parach** (N duże → p≈0 zawsze) | tylko liczby w tekście / summary | `wilcoxon.*.pairs` |
+| 6.3 | Heterogeniczność | mediana \(\Delta\%\) CVE per repo, top 15 repo po liczbie par **slim** | horizontal bar | `figures/6_3_delta_cve_pct_by_repo_slim.png` |
+| 6.5 | Slim vs alpine | Friedman na CVE w grupach mających **standard+slim+alpine** (pomiary powtarzane) | boxplot trzech klas na tych grupach | `figures/6_5_friedman_triplet.png` |
+| 6.6 | Distroless | **studium przypadku**: mediana \(\Delta\) CVE per `family`×`os_line` (oś z wariantu utwardzonego); Wilcoxon per-repo tylko ilustracja (n_repo=4). W tekście: 40 par obrazów ≈ 27 grup (kilka distroless/`debian` na jeden `group_id`) | grouped bar | `figures/6_6_distroless_delta_by_family.png` |
+
+**Wyniki pierwszego przebiegu (do rozdz. 6 — weryfikować w `analysis_summary.json`):**
+
+| Metoda | N par | N repo | Mediana \(\Delta\) CVE (repo) | Mediana \(\Delta\%\) (repo) | \(p\) Wilcoxon (repo, less) |
+| --- | --- | --- | --- | --- | --- |
+| slim | 1507 | 21 | −331 | **−53,1%** | \(3{,}8\cdot 10^{-6}\) |
+| alpine | 1315 | 53 | −507 | **−90,9%** | \(3{,}1\cdot 10^{-10}\) |
+| distroless | 40 | 4 | −2211 | −90,6% | 0,0625 (małe N — **nie** filar) |
+| Friedman triplet | 300 grup | — | mediany CVE: std 3526,5 / slim 371 / alpine 98 | — | \(p\approx 2\cdot 10^{-129}\) |
+
+Zera w delcie są pomijane wewnątrz Wilcoxona (`scipy` wymaga niezerowych rang); raportujemy
+też N przed odfiltrowaniem.
+
+**Distroless w tekście:** tabela / wykres 6.6 + zastrzeżenie liczebności; Google nie publikuje
+distroless dla nginx/postgres/redis itd. **Nie** mieszać w jednym „rankingu metod” z slim/alpine
+bez osobnego akapitu o N.
 
 ### Niepełne grupy — jak analizować w inżynierce
 
@@ -630,9 +734,9 @@ w każdej grupie.** `standard` jest w grupie **raz** (jeden skan); delty `slim`/
 | sam `standard` | 3 797 | tylko punkt 5 (opis ekosystemu) |
 | `slim`+`standard` | 1 209 | Wilcoxon slim |
 | `alpine`+`standard` | 1 034 | Wilcoxon alpine |
-| `alpine`+`slim`+`standard` | 294 | Friedman slim vs alpine (główny kontrast metod) |
+| `alpine`+`slim`+`standard` | 294 | Friedman slim vs alpine (po skanie: **300** grup z kompletem OK) |
 | `distroless`+`slim`+`standard` | 18 | studium distroless |
-| pełne 4 klasy | **8** | Friedman z distroless — wynik pomocniczy / ilustracja |
+| pełne 4 klasy | **8** | Friedman z distroless — wynik pomocniczy / ilustracja (kod Analyze **nie** liczy tego jako filaru) |
 | sam `alpine` / sam `slim` / sam `distroless` | 470+168+15 | descriptive lub bez pary |
 | `distroless`+`standard` (bez slim/alpine) | 1 | para distroless |
 | `alpine`+`slim` bez `standard` | 2 | descriptive, bez delty |
@@ -640,26 +744,22 @@ w każdej grupie.** `standard` jest w grupie **raz** (jeden skan); delty `slim`/
 Wśród 2 564 grup `paired`: brak distroless w 2 537, brak alpine w 1 228, brak slim w 1 035.
 To odzwierciedla podaż wariantów, nie błąd matrycy.
 
-**Mapowanie na punkty APD:**
+**Mapowanie na punkty APD (po skanie):**
 
-1. **Punkt 5** — cała matryca (~9,9 tys. obrazów), w tym samotne `standard`. Pełna grupa
-   niepotrzebna.
-2. **Punkt 6 — slim / alpine vs `standard`** — Wilcoxon osobno na parach (1 529 slim,
-   1 336 alpine). Główny wynik: **mediana delt per repozytorium** (21 repo ze `slim`,
-   53 z `alpine`); wynik na wszystkich parach tylko pomocniczo.
-3. **Punkt 6 — slim vs alpine** — Friedman (lub porównanie delt) na **294** grupach
-   z oboma wariantami + `standard`. To filar „która metoda redukuje CVE bardziej”.
-4. **Punkt 6 — distroless** — studium przypadku na 27 parach / 4 technologiach; tabela,
-   nie uogólnienie na ekosystem. Zdanie do ograniczeń: Google nie publikuje distroless
-   dla nginx, postgres, redis itd.
-5. **Punkt 6 — pełne czwórki (8 grup)** — ostrożny wynik pomocniczy przy Friedmanie
-   z udziałem distroless; **nie** filar obrony.
-6. **Punkt 7** — wykres dwóch osi per para względem `standard`; rekomendacje z delt
-   slim/alpine (mocne N) + akapit o distroless i `nonroot` (jakościowo).
+1. **Punkt 5** — 9755 skanów OK, w tym samotne `standard` i `descriptive`.
+2. **Punkt 6 — slim / alpine vs `standard`** — Wilcoxon na medianach delt per repo
+   (**21** / **53**); pary 1507 / 1315 tylko pomocniczo.
+3. **Punkt 6 — slim vs alpine** — Friedman na **300** grupach z kompletem po skanie.
+4. **Punkt 6 — distroless** — studium: **40** par / **4** technologie (repo); nie uogólniać.
+5. **Punkt 6 — pełne czwórki (8 grup w matrycy)** — opcjonalna ilustracja; **nie** w `Analyze.py`
+   jako główny test.
+6. **Punkt 7** — scatter + mediany CI + tabela runtime; rekomendacje z slim/alpine + akapit
+   distroless/`nonroot`.
 
-**Czego nie robić w pracy:** uśredniać klasy globalnie (paradoks Simpsona); udawać, że
+**Czego nie robić w pracy:** uśredniać klasy globalnie jako dowód utwardzania; udawać, że
 N=8 czwórek = mocny test czterech metod; mieszać delt distroless z deltami slim w jednym
-„rankingu” bez zastrzeżenia liczebności; skanować `standard` wielokrotnie pod każdą parę.
+rankingu bez zastrzeżenia N; doskanowywać 168 porażek z Docker Huba; używać `created`
+z configu distroless jako wieku; joinować pary po `os_line`/`repo_key` zamiast `group_id`.
 
 **Zdanie do rozdz. 2 / ograniczeń:** *Utwardzone warianty nie są standardem ekosystemu;
 pełny trójkąt lub czworokąt zamyka się dla nielicznych technologii. Porównania metod
@@ -668,13 +768,33 @@ przypadku.*
 
 ### Punkt 7 — bezpieczeństwo vs funkcjonalność
 
-- **Wykres dwóch osi** per para: redukcja CVE względem `standard` vs utrata funkcjonalności
-  (spadek liczby pakietów, brak powłoki, brak menedżera pakietów). Każda klasa to osobna chmura.
-- **Tabela cech runtime'u** per klasa: odsetek obrazów z powłoką, `apt`/`apk`, narzędziami
-  diagnostycznymi. Bez testów — cechy wynikają wprost z budowy obrazów (distroless nie ma
-  powłoki z definicji).
-- **Rekomendacje doboru baz** z obu osi (np. „`slim` daje X% redukcji CVE przy zachowaniu
-  powłoki i `apt`”) plus wniosek o `nonroot`: utwardzenie użytkownika przy zerowej zmianie CVE.
+**Cel:** odpowiedzieć, *kiedy* utwardzanie zaczyna boleć runtime — druga oś obok CVE.
+
+| # | Co robimy | Jak | Wykres | Plik |
+| --- | --- | --- | --- | --- |
+| 7.1 | Trade-off per para | X = \(-\Delta\%\) CVE, Y = \(-\Delta\%\) pakietów; kolor = metoda; osie przycięte do percentyli 1–99 (outliery nie zjadają skali; pełne dane w testach) | scatter | `figures/7_1_tradeoff_scatter.png` |
+| 7.2 | Trade-off metod | te same osie na **medianach per repo** z CI 95% (bootstrap) | errorbar 2D | `figures/7_2_tradeoff_medians.png` |
+| 7.3 | Cechy runtime | % obrazów z `has_shell` / `has_apt` / `has_apk` / `has_busybox` per klasa — **bez testów** (cechy konstrukcyjne) | grouped bar | `figures/7_3_runtime_features.png` |
+| 7.4 | Rekomendacje (tekst) | z 6.2 + 7.2 + 7.3: np. slim ≈ −53% CVE przy zachowaniu powłoki i apt; alpine ≈ −91% CVE, inna libc/`apk`; distroless — studium + `nonroot` jakościowo (zero kosztu CVE, Konsekwencja 1) | akapity rozdz. 7 | — |
+
+**Orientacyjne % runtime (cała próba skanu):** slim ≈ 100% powłoka / ≈ 99% apt; alpine ≈ 100%
+powłoka / 100% apk / 0% apt; distroless ≈ 9% flaga powłoki (reszta bez shell — zgodne z budową).
+
+### Kolejność pisania rozdziałów z tych artefaktów
+
+1. Rozdz. 5: tabele opisowe + wykresy `5_*` + Spearman + świeżość Debiana/tagu.
+2. Rozdz. 6: definicja pary i N → `6_2` jako wynik główny → Friedman `6_5` → studium `6_6`.
+3. Rozdz. 7: `7_1`/`7_2` + `7_3` → rekomendacje doboru baz; osobny akapit `nonroot`.
+4. Ograniczenia: ubytek 168, brak distroless poza ~5 family, asymetria N, join tylko lustro.
+
+### Checklist przed oddaniem rozdziałów 5–7
+
+- [ ] `python src/Analyze.py` na finalnym `scans.jsonl`; liczby w tekście = `analysis_summary.json`
+- [ ] W tekście podane: wersja Trivy, data bazy CVE, N skanów / par / repo
+- [ ] Główny Wilcoxon opisany jako **per repozytorium**, nie „na 1507 parach”
+- [ ] Distroless wyraźnie jako studium przypadku
+- [ ] Żadnych średnich klas jako dowodu przewagi metody
+- [ ] Wykresy w `figures/` wstawione / zreferowane pod tymi nazwami plików
 
 ### Rozkład klas w matrycy — jak to opisać
 
