@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Wersja Trivy jest przypięta i musi być zapisana w pracy (wpływa na wyniki skanów).
 # Uwaga: aquasecurity/trivy usuwa binaria starych wydań z GitHub Releases - tagi gita
 # zostają, ale pliki nie. Wersji z serii 0.4x nie da się już pobrać.
-ARG TRIVY_VERSION=v0.74.0
+ARG TRIVY_VERSION=v0.75.0
 
 # curl jest potrzebny wyłącznie do instalacji Trivy
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
