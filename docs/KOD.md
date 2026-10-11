@@ -1,13 +1,13 @@
-# Dokumentacja kodu fetchera (Kroki 1–5)
+# Dokumentacja kodu (Kroki 1–6)
 
 Dokument opisuje **istniejący kod** w `src/` — co robi każdy krok, w jakiej kolejności, jakie
 pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia metodologiczne
 (dlaczego cztery klasy, dlaczego tylko `latest` z distroless, skąd próg 10 tys.) są w
 [`PLAN.md`](PLAN.md); tutaj pojawiają się tylko tam, gdzie tłumaczą konkretną linię kodu.
 
-Krok 5 (matryca) ma `candidates`, `select` i `layers`; Krok 6 (skaner Trivy) nie ma
-jeszcze kodu. Liczby z przebiegu **06.10.2026** (przed `layers`) są w §10; uzasadnienia
-metodologiczne (niepełne grupy, analiza) — w [`PLAN.md`](PLAN.md).
+Krok 5 (matryca): `candidates`, `select`, `layers`. Krok 6 (skaner): `Scan.py` —
+`freeze-db`, `split`, `run`, `merge`. Liczby matrycy z przebiegu **06–07.10.2026** są w §10;
+uzasadnienia metodologiczne — w [`PLAN.md`](PLAN.md).
 
 ## Spis treści
 
@@ -24,6 +24,7 @@ metodologiczne (niepełne grupy, analiza) — w [`PLAN.md`](PLAN.md).
 11. [Formaty plików](#11-formaty-plików)
 12. [Cache i wznawianie](#12-cache-i-wznawianie)
 13. [Zachowania brzegowe i ograniczenia](#13-zachowania-brzegowe-i-ograniczenia)
+14. [Krok 6 — `Scan.py`: skaner Trivy](#14-krok-6--scanpy-skaner-trivy)
 
 ---
 
@@ -53,6 +54,11 @@ flowchart TD
   k5s --> matrix["results/matrix.jsonl"]
   matrix --> k5l["Krok 5B: Matrix.py layers"]
   k5l --> matrix2["results/matrix.jsonl + layer_key"]
+  matrix2 --> split["Krok 6: Scan.py split"]
+  split --> parts["matrix_part_0..11"]
+  parts --> workers["12 kontenerow Scan.py run"]
+  workers --> merge["Scan.py merge"]
+  merge --> scans["results/scans.jsonl"]
 ```
 
 | Plik | Polecenie | Wejście | Wyjście | Sieć |
@@ -67,6 +73,10 @@ flowchart TD
 | `src/Matrix.py` | `candidates` | `refs.jsonl` | `results/candidates.jsonl` | **brak** |
 | `src/Matrix.py` | `select` | `candidates_probed.jsonl` | `results/matrix.jsonl`, `results/matrix_report.json` | **brak** |
 | `src/Matrix.py` | `layers` | `matrix.jsonl` | `matrix.jsonl` + raport (z `layer_key`) | `mirror.gcr.io`, `gcr.io` |
+| `src/Scan.py` | `freeze-db` | — | `trivy_cache/frozen`, `w0..w11`, `db_snapshot/` | GHCR (baza Trivy) |
+| `src/Scan.py` | `split` | `matrix.jsonl` | `matrix_part_*.jsonl` | **brak** |
+| `src/Scan.py` | `run` | `matrix_part_i` | `reports/w{i}/`, `metrics_part_i` | rejestry (remote) |
+| `src/Scan.py` | `merge` | `metrics_part_*` | `scans.jsonl` | **brak** |
 
 Moduły importują się nawzajem po nazwie (`from hub_http import ...`), więc skrypty uruchamia się
 jako `python src/<Plik>.py` z katalogu głównego repozytorium — Python dodaje wtedy `src/` do
@@ -75,9 +85,10 @@ bieżącego katalogu.
 
 ## 2. Uruchomienie
 
-**Zależności** (`requirements.txt`): `requests`, `requests_cache`, `python-dotenv`.
-`requests_cache` jest opcjonalny:
-bez niego kod działa, tylko bez cache HTTP (patrz [rozdział 12](#12-cache-i-wznawianie)).
+**Zależności** (`requirements.txt`, wersje przypięte): `requests`, `requests_cache`,
+`python-dotenv`. `requests_cache` jest opcjonalny: bez niego kod działa, tylko bez cache HTTP
+(patrz [rozdział 12](#12-cache-i-wznawianie)). Krok 6 nie dokłada zależności Pythona — Trivy
+jest w obrazie Dockera (`TRIVY_VERSION=v0.75.0`).
 
 **Środowisko `.venv`.**
 
@@ -806,3 +817,67 @@ parametry (`target`, `pair_cap`, `desc_cap`, `seed`), liczba wierszy (łącznie 
   uruchomienia `assign`, więc ponowne `assign` po aktualizacji obrazu przez Google da nowy digest.
 - **`Matrix.py layers`** wymaga sieci; wynik nadpisuje `matrix.jsonl`. Uruchamiać po `select`,
   przed Krokiem 6.
+
+---
+
+## 14. Krok 6 — `Scan.py`: skaner Trivy
+
+Kampania: zamrożona baza CVE, 12 kontenerów, każdy dostaje `matrix_part_i`, na końcu jeden
+plik `results/scans.jsonl` pod analizę (punkty APD 5–7). Uzasadnienie flag Trivy i zamrożenia
+bazy: [`PLAN.md`](PLAN.md) (Architektura kampanii skanowania).
+
+### Kolejność
+
+```powershell
+docker build -t cia-scanner .
+docker run --rm -v "${PWD}:/app" -w /app cia-scanner python src/Scan.py freeze-db
+python src/Scan.py split --parts 12
+.\run_scan_workers.ps1
+# albo recznie: docker run ... python src/Scan.py run --part N
+python src/Scan.py merge
+python src/Scan.py status
+```
+
+`split` i `merge` nie potrzebują Trivy — działają na hoście w `.venv`. `freeze-db` i `run`
+wymagają binarium `trivy` (w kontenerze z Dockerfile).
+
+### Subkomendy
+
+| Komenda | Wejście | Wyjście |
+| --- | --- | --- |
+| `freeze-db` | sieć (GHCR) | `trivy_cache/frozen/`, kopia `db/`+`java-db/` → `trivy_cache/w0..w11`, `results/db_snapshot/metadata.json` |
+| `split --parts 12` | `results/matrix.jsonl` | `results/matrix_part_0.jsonl` … `_11.jsonl` (kolejne kawałki) |
+| `run --part i` | `matrix_part_i` | `reports/w{i}/<digest>.json.gz`, `results/metrics_part_i.jsonl`, `failures_part_i.jsonl` |
+| `merge` | `metrics_part_*` | `results/scans.jsonl`, `results/scan_failures.jsonl` |
+| `status` | katalogi powyżej | log postępu |
+
+### Flagi Trivy (w `run`)
+
+`--image-src remote --scanners vuln --list-all-pkgs --skip-db-update --skip-java-db-update
+--format json`. Bez `--sbom-sources`. Timeout domyślnie 600 s; nieszerowy kod wyjścia albo
+timeout → wiersz w `failures_part_i`, kampania idzie dalej.
+
+### Resume
+
+Jeśli `reports/w{i}/<arch_digest bez sha256:>.json.gz` istnieje i da się odczytać jako JSON,
+obraz jest pomijany. Brakujący wiersz w `metrics_part_i` jest wtedy uzupełniany z raportu
+(odzyskanie po przerwaniu zaraz po zapisie gzip).
+
+### Cache per kontener
+
+Wspólny BoltDB przy 12 pisarzach jest ryzykowny, więc każdy worker ma `trivy_cache/w{i}/`.
+Baza CVE jest **skopiowana** z `frozen/` przy `freeze-db` (nie pobierana osobno) — wersja CVE
+jest wspólna. Cache warstw nie jest współdzielony (świadomy trade-off).
+
+### `run_scan_workers.ps1`
+
+Buduje 12 kontenerów `cia-scan-0..11` z obrazu `cia-scanner`, czeka (`docker wait`), usuwa je,
+woła `merge` i `status`. Katalog projektu montowany jako `/app`. Przed startem Trivy kontener
+robi `mkdir -p /tmp/trivy` (`TMPDIR`) — bez tego skan pada od razu.
+
+### Wiersz `scans.jsonl`
+
+Pola z matrycy (`logical_ref`, `family`, `variant`, `group_id`, `paired`, `stratum`, …) plus
+`cve_total`, `cve_critical|high|medium|low|unknown`, `cve_with_fix`, `pkg_count`,
+`has_shell`, `has_busybox`, `has_apt`, `has_apk`, `part_id`, `scan_ok`, `scanned_at`.
+Pełne raporty CVE zostają w `reports/w{i}/` (gzip).
