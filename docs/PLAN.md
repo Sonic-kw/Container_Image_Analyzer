@@ -59,14 +59,39 @@ Rozbudowywanie skanera ponad to, czego wymaga matryca, nie przybliża do obrony.
 przepis analizy i wykresów pod rozdz. 5–7:
 [Plan analizy statystycznej](#plan-analizy-statystycznej-punkty-57).
 
-### Literatura
+### Literatura (kanoniczna z opisu APD — obowiązkowa w pracy i w `.bib`)
 
-1. Rice L., *Container Security*, O'Reilly 2020
-2. Vehent J., *Securing DevOps*, Manning 2018
-3. NIST SP 800-190, *Application Container Security Guide*
-4. Google Cloud, *Distroless Container Images*
-5. FIRST, *CVSS v3.1 Specification Guide*
-6. *SLSA Framework* documentation
+Pełne zapisy jak w opisie pracy; w Overleaf te same pozycje w `bibliography.bib`.
+**Nie zastępować** skróconymi wariantami przy cytowaniu finalnym.
+Streszczenia źródeł pod rozdziały: [`LITERATURA.md`](LITERATURA.md).
+Wszystkie wyniki skryptów (czasy, lejek, końcowa tabela, punkty 5–7 z wykresami): [`WYNIKI.md`](WYNIKI.md).
+Plan pisania — co w którym rozdziale i podrozdziale: [`PISANIE.md`](PISANIE.md).
+
+1. Rice L., *Container Security: Fundamental Technology Concepts that Protect
+   Containerized Applications*, O'Reilly Media, 2020.
+2. Vehent J., *Securing DevOps: Security in the Cloud*, Manning Publications, 2018.
+3. NIST Special Publication 800-190, *Application Container Security Guide*,
+   National Institute of Standards and Technology, 2017.
+4. Google Cloud, *Distroless Container Images*,
+   github.com/GoogleContainerTools/distroless [dostęp online].
+5. FIRST (Forum of Incident Response and Security Teams),
+   *Common Vulnerability Scoring System v3.1: Specification Guide*, first.org, 2019
+   [dostęp online].
+6. SLSA Framework documentation, *Supply-chain Levels for Software Artifacts*,
+   slsa.dev [dostęp online].
+
+#### Do czego każde źródło w rozdziałach (ustalone empirycznie / zakresem)
+
+| # | Źródło | Gdzie w pracy | Co brać | Czego **nie** szukać |
+| --- | --- | --- | --- | --- |
+| 1 | Rice | rozdz. 2 (teoria), część metodyki | powierzchnia ataku; Dockerfile: mniejszy obraz bazowy, `scratch` / distroless; warstwy, digest vs tag; skanowanie | taksonomia poziomów `standard`/`slim`/`alpine`/`distroless` — **brak** |
+| 2 | Vehent | rozdz. 1–2 (łańcuch dostaw / DevOps), ewentualnie integralność | pipeline CI/CD, Hub, minimalny obraz (przykład BusyBox), Docker Content Trust | poziomy utwardzenia slim/alpine/distroless — **brak** |
+| 3 | NIST SP 800-190 | rozdz. 2.4 (standardy), ograniczenia | oficjalne wytyczne bezpieczeństwa aplikacji kontenerowych; zagrożenia i kontrole | szczegółowa klasyfikacja tagów Hub |
+| 4 | Distroless (Google) | rozdz. 2.3, 3 (matryca), 5.4 studium | definicja i uzasadnienie klasy `distroless`; warianty; FAQ `gcr.io` | porównanie z slim/alpine — to Twoje pomiary |
+| 5 | CVSS v3.1 (FIRST) | rozdz. 3 (metryki), 5 (analiza) | jak interpretować severity / wektory przy agregacji CVE z Trivy | metody utwardzania obrazów |
+| 6 | SLSA | rozdz. 2.4, metodyka (pin digestem, punkt w czasie) | integralność łańcucha dostaw; uzasadnienie pinowania digestem/datą | warianty tagów utwardzenia |
+
+**Wniosek do pisania:** klasy utwardzenia (`standard` / `slim` / `alpine` / `distroless`) to **własna taksonomia badawcza** oparta na praktyce Hub + dokumentacji Distroless; literatura APD daje ramy (powierzchnia ataku, standardy, scoring, łańcuch dostaw), nie gotowy ranking poziomów. W bibliografii pracy muszą znaleźć się **wszystkie 6** pozycji (cytowane w tekście). Dodatkowe źródła wolno dokładać, ale tej szóstki nie pomijać.
 
 ### Stos technologiczny
 
