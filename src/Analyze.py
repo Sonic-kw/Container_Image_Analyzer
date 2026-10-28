@@ -253,8 +253,8 @@ def fig_cve_by_os_line(df: pd.DataFrame, out_dir: Path) -> None:
 
 
 def fig_cve_vs_age(df: pd.DataFrame, out_dir: Path) -> None:
-    # distroless: tag_last_pushed moze byc puste — tylko Hub
-    hub = df[df["source_registry"] == "hub"].dropna(subset=["tag_last_pushed"]).copy()
+    # distroless: tag_last_pushed = timeUploadedMs z gcr.io (GcrMeta.py)
+    hub = df.dropna(subset=["tag_last_pushed"]).copy()
     if hub.empty:
         log.warning("brak tag_last_pushed — pomijam 5_7")
         return
@@ -269,7 +269,7 @@ def fig_cve_vs_age(df: pd.DataFrame, out_dir: Path) -> None:
         ax.scatter(sub["age_days"], sub["cve_total"], s=8, alpha=0.35, c=COLORS[v], label=v)
     ax.set_xlabel("Wiek tagu (dni wstecz od najnowszego w probie)")
     ax.set_ylabel("CVE")
-    ax.set_title("CVE vs swiezosc tagu (Docker Hub)")
+    ax.set_title("CVE vs swiezosc tagu")
     ax.legend(markerscale=2)
     ax.grid(alpha=0.3)
     savefig(fig, out_dir, "5_7_cve_vs_age")

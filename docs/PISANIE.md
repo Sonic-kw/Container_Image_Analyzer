@@ -1,3 +1,4 @@
+
 # Plan pisania pracy — co w którym rozdziale
 
 Rozpiska pod obowiązujący spis treści (7 rozdziałów, Wstęp i Podsumowanie liczone jako
@@ -28,6 +29,8 @@ Oznaczenia źródeł w tekście poniżej: **[Rice]**, **[Vehent]**, **[NIST]**, 
 - **„0 CVE” to „brak dopasowania w bazie skanera”**, nie „obraz bez podatności”.
 - **Wynik główny = mediany per repozytorium**, wynik na wszystkich parach jest pomocniczy.
 - **Nie powtarzaj tabel.** Liczba pojawia się raz z tabelą, potem tylko odwołanie.
+- **Format tabel.** Każdy wiersz oddzielony linią (`\hline` po każdym `\\`), etykiety kolumn
+  w nagłówku pogrubione (`\textbf{...}`), tak jak w przykładzie z `info.tex`.
 - Literówki w spisie treści: „runtime**a**” w 6.1 i „rozwiązani” w 6.3.
 
 ### Szacunkowa objętość
@@ -377,7 +380,7 @@ Pięć części, każda z rysunkiem:
    (`archlinux`, `busybox`, `fedora`) i ~150 z testowych wydań Debiana.
 2. **Rozmiar i pakiety** (rys. `5_2`). `slim` i `alpine` mają ten sam rozmiar (~66 MB), ale
    `alpine` ma dwa razy mniej pakietów. Distroless: 13 pakietów, najwyższa gęstość CVE na pakiet
-   (4,96). Brak rozmiaru distroless — ograniczenie.
+   (4,96), mediana rozmiaru 21,5 MB (uzupełniona z manifestów `gcr.io`, `WYNIKI.md` 5.2).
 3. **Krytyczność** (rys. `5_3`). `alpine` ma wyższy *udział* HIGH/CRITICAL, ale mniej poważnych CVE
    bezwzględnie (mediana CRITICAL 3 vs 9). Udział CVE z poprawką 99% vs ~50% — **asymetria źródeł
    porad** (Alpine secdb vs Debian Security Tracker); odwołaj się do **[Rice]** i **[CVSS]**.
@@ -462,7 +465,8 @@ Cel rozdziału: punkt APD 7 — co z wyników wynika dla praktyka. Mniej liczb, 
 **Co napisać** — lista z `WYNIKI.md` sekcja 9 (10 punktów), pogrupowana:
 
 - **Dane:** punkt w czasie (jedna baza); 0 CVE ≠ bezpieczny; asymetria źródeł porad; liczba
-  pakietów obejmuje pakiety języków; brak rozmiaru i wieku distroless.
+  pakietów obejmuje pakiety języków; rozmiar i wiek distroless dopisane po kampanii z metadanych
+  `gcr.io` (wiek z daty wgrania, nie publikacji tagu).
 - **Próba:** tylko lustro (58% odrzuconych, przesunięcie w stronę nowych tagów); 168 porażek;
   tylko `library/` i amd64; distroless tylko na Debianie, 4 repozytoria; Friedman z 8.
 - **Metoda:** pary między dystrybucjami w `alpine`; brak oceny środowiskowej CVSS; tylko

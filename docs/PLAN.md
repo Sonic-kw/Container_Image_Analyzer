@@ -403,8 +403,9 @@ reprodukowalnego (Bazel zeruje znaczniki czasu dla determinizmu), nie błąd rej
 jako kryterium świeżości — dla całej klasy `distroless` byłoby stałą równą epoce, co
 systematycznie zaburzyłoby każdą analizę korelującą wiek z liczbą CVE. Wiek obrazów z Huba
 bierzemy z `tag_last_pushed` z API, a dla distroless trzeba albo zrezygnować z tego wymiaru,
-albo wziąć datę z metadanych rejestru (`timeUploaded`), nie z configu. Do zapisania jako
-ograniczenie w rozdz. 5.
+albo wziąć datę z metadanych rejestru (`timeUploaded`), nie z configu.
+**Zrobione 26.10.2026:** `src/GcrMeta.py` wpisuje do `tag_last_pushed` wartość `timeUploadedMs`
+przeskanowanego digestu z `gcr.io/v2/<repo>/tags/list` (dostępna dla wszystkich 55 obrazów).
 
 ### Konsekwencja 1 — skanujemy tylko `latest` (decyzja podjęta)
 
@@ -704,7 +705,7 @@ używać obrazów bez pary.
 | 5.5 | CVE vs pakiety | j.w. | scatter | `figures/5_5_cve_vs_pkg.png` |
 | 5.4–5.5 test | Zależność | Spearman \(\rho\) `cve_total`↔`arch_size_mb` oraz ↔`pkg_count` | liczby w tekście | `spearman` w summary |
 | 5.6 | Świeżość bazy OS | boxplot CVE dla `os_line` zaczynających się od `debian` | boxplot log | `figures/5_6_cve_by_debian_line.png` |
-| 5.7 | Świeżość tagu | tylko `source_registry=hub`; wiek = dni wstecz od max `tag_last_pushed` w próbie | scatter | `figures/5_7_cve_vs_age.png` |
+| 5.7 | Świeżość tagu | wszystkie obrazy z `tag_last_pushed` (distroless od 26.10.2026); wiek = dni wstecz od max `tag_last_pushed` w próbie | scatter | `figures/5_7_cve_vs_age.png` |
 
 **Wynik orientacyjny (pierwszy przebieg Analyze, do cytowania po weryfikacji w summary):**
 mediana CVE: standard 595, slim 366, alpine 98, distroless 70; Spearman rozmiar
@@ -713,8 +714,8 @@ mediana CVE: standard 595, slim 366, alpine 98, distroless 70; Spearman rozmiar
 **Teza do rozwinięcia w rozdz. 5 (z pilotażu):** mniej pakietów nie gwarantuje mniej CVE —
 świeżość linii Debiana bywa silniejsza niż sama liczba komponentów.
 
-**Uwaga:** `arch_size` dla części distroless (GCR) bywa puste → mediana rozmiaru NaN;
-w tekście nie twierdzić o rozmiarze distroless z API Huba bez uzupełnienia źródła.
+**Uwaga (rozwiązana 26.10.2026):** `arch_size` distroless było puste; `src/GcrMeta.py` uzupełnia
+je sumą `size` warstw z manifestu `amd64` w `gcr.io` (ta sama miara co `arch_size` z API Huba).
 
 ### Punkt 6 — porównanie metod utwardzania (tylko pary)
 

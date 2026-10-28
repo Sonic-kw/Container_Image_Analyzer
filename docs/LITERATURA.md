@@ -310,7 +310,7 @@ Ograniczenie zawartości kontenera do dokładnie tego, czego potrzebuje aplikacj
 
 Drugi skutek łączy distroless z łańcuchem dostaw (SLSA): im mniej składników, tym mniej do sprawdzenia.
 
-Rozmiar według README: najmniejszy obraz, `gcr.io/distroless/static-debian13`, ma około 2 MiB; README porównuje to z około 5 MiB dla `alpine` i 124 MiB dla `debian`. To deklaracja projektu, nie pomiar tej pracy. W danych kampanii rozmiar części obrazów distroless z GCR jest pusty (`arch_size`), więc porównania rozmiaru distroless nie należy opierać na własnej tabeli bez uzupełnienia źródła.
+Rozmiar według README: najmniejszy obraz, `gcr.io/distroless/static-debian13`, ma około 2 MiB; README porównuje to z około 5 MiB dla `alpine` i 124 MiB dla `debian`. To deklaracja projektu, nie pomiar tej pracy. W danych kampanii rozmiar distroless uzupełniono z manifestów `gcr.io` (`src/GcrMeta.py`): `static-debian13` ma 0,86 MB skompresowanych warstw, mediana klasy 21,5 MB (`WYNIKI.md` 5.2).
 
 ### Warianty i to, co zawierają
 

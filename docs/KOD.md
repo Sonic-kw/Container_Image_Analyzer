@@ -137,6 +137,18 @@ python src/Classify.py probe-tags --in results/candidates.jsonl --out results/ca
 python src/Matrix.py select
 ```
 
+Po kampanii skanowania (Krok 6, `Scan.py merge` → `results/scans.jsonl`):
+
+```bash
+python src/GcrMeta.py      # rozmiar i data wgrania distroless z gcr.io (bez skanowania)
+python src/Analyze.py      # wykresy figures/5_* … 7_* i results/analysis_summary.json
+python src/Funnel.py       # schemat lejka figures/3_1_lejek.png (rozdz. 3)
+```
+
+`GcrMeta.py` uzupełnia w `scans.jsonl` pola, których katalog `gcr.io` nie daje: `arch_size`
+(suma `size` warstw z manifestu `amd64`) i `tag_last_pushed` (`timeUploadedMs` digestu z
+`tags/list`); źródło zapisuje w `arch_size_source` / `tag_last_pushed_source`.
+
 Każde polecenie przyjmuje `-v` / `--verbose` (logi na poziomie DEBUG, np. każda strona API).
 
 ## 3. `hub_http.py` — wspólny klient HTTP

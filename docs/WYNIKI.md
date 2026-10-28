@@ -209,23 +209,29 @@ Warstwa `pairs` to grupy, w których jest `standard` i co najmniej jeden wariant
 Debian dominuje: 42% całej matrycy i niemal wszystkie `slim`. 38% obrazów nie ma linii OS w
 tagu (np. `node:20`); wchodzą do analizy, ale nie parują się z distroless.
 
-### Wiek tagów (`tag_last_pushed`, tylko Docker Hub)
+### Wiek tagów (`tag_last_pushed`, matryca)
 
-| Rok | `standard` | `slim` | `alpine` | Σ |
-| --- | --- | --- | --- | --- |
-| 2016 | 64 | 11 | 7 | 82 |
-| 2017 | 152 | 20 | 38 | 210 |
-| 2018 | 213 | 69 | 57 | 339 |
-| 2019 | 204 | 80 | 52 | 336 |
-| 2020 | 386 | 109 | 118 | 613 |
-| 2021 | 539 | 166 | 128 | 833 |
-| 2022 | 733 | 227 | 218 | 1 178 |
-| 2023 | 732 | 204 | 234 | 1 170 |
-| 2024 | 737 | 215 | 199 | 1 151 |
-| 2025 | 902 | 240 | 232 | 1 374 |
-| 2026 | 1 699 | 358 | 525 | 2 582 |
+Docker Hub: data publikacji tagu z API. Distroless: `timeUploadedMs` przeskanowanego digestu
+`amd64` z `gcr.io/v2/<repo>/tags/list`, uzupełnione 26.10.2026 przez `src/GcrMeta.py`.
+
+| Rok | `standard` | `slim` | `alpine` | `distroless` | Σ |
+| --- | --- | --- | --- | --- | --- |
+| 2016 | 64 | 11 | 7 | 0 | 82 |
+| 2017 | 152 | 20 | 38 | 0 | 210 |
+| 2018 | 213 | 69 | 57 | 0 | 339 |
+| 2019 | 204 | 80 | 52 | 0 | 336 |
+| 2020 | 386 | 109 | 118 | 0 | 613 |
+| 2021 | 539 | 166 | 128 | 8 | 841 |
+| 2022 | 733 | 227 | 218 | 8 | 1 186 |
+| 2023 | 732 | 204 | 234 | 3 | 1 173 |
+| 2024 | 737 | 215 | 199 | 11 | 1 162 |
+| 2025 | 902 | 240 | 232 | 1 | 1 375 |
+| 2026 | 1 699 | 358 | 525 | 24 | 2 606 |
 
 Ponad jedna czwarta próby (26%) to tagi z 2026 roku. To skutek sondy lustra, nie losowania.
+Starsze linie distroless nie są przebudowywane: wszystkie obrazy `debian9` mają datę
+31.03.2021, a `base` / `cc` / `static` na `debian10` — 01.09.2022 (z tagiem
+`deprecated-public-image-…`).
 
 ### Największe repozytoria w `scans.jsonl` (213 repozytoriów)
 
@@ -295,7 +301,7 @@ W tekście: „0 CVE” oznacza „brak dopasowania w bazie skanera”, a nie ob
 | `standard` | 200,3 | 92,7–334,9 | 193 | 119–409 | 3,36 |
 | `slim` | 66,6 | 29,9–86,3 | 168 | 96–274 | 1,84 |
 | `alpine` | 65,6 | 38,8–118,5 | 74 | 32–209 | 1,11 |
-| `distroless` | brak danych | — | 13 | 9–24 | 4,96 |
+| `distroless` | 21,5 | 9,0–50,4 | 13 | 9–24 | 4,96 |
 
 ![Rozmiar i pakiety per klasa](../figures/5_2_size_pkg_by_variant.png)
 
@@ -305,9 +311,10 @@ miara powierzchni. Distroless ma medianę 13 pakietów, a jednocześnie najwyżs
 pakiet (4,96) — zostają w nim właśnie te biblioteki, które w Debianie mają najwięcej
 zgłoszeń (glibc, libssl, runtime języka).
 
-Rozmiar distroless jest pusty dla **wszystkich 55** obrazów: `GetRepo.py gcr` nie zapisuje
-`arch_size`, a API Huba nie obejmuje `gcr.io`. Porównania rozmiaru distroless nie da się oprzeć
-na tej tabeli; w pracy podać to jako ograniczenie albo uzupełnić z manifestów.
+Rozmiar distroless pierwotnie był pusty (`GetRepo.py gcr` nie zapisywał `arch_size`).
+Uzupełniono go 26.10.2026 przez `src/GcrMeta.py` jako sumę pól `size` warstw z manifestu `amd64`
+w `gcr.io`, bez ponownego skanowania. To ta sama miara co `arch_size` z API Huba — na 6 losowych
+obrazach Huba suma warstw z manifestu była identyczna z `arch_size` co do bajta.
 
 Liczba pakietów z `--list-all-pkgs` obejmuje też pakiety języków (np. moduły npm dołączone do
 Node.js), nie tylko pakiety systemowe. Widać to w `distroless/nodejs-debian9` (377 pakietów).
@@ -341,13 +348,13 @@ Etykiety krytyczności pochodzą z pola `Severity` w raporcie Trivy (patrz `LITE
 
 | Zakres | Spearman ρ (CVE ~ rozmiar) | Spearman ρ (CVE ~ pakiety) |
 | --- | --- | --- |
-| wszystkie obrazy | **0,568** (n = 9 700) | **0,599** (n = 9 755) |
+| wszystkie obrazy | **0,570** (n = 9 755) | **0,599** (n = 9 755) |
 | `standard` | 0,544 | 0,631 |
 | `slim` | 0,560 | 0,276 |
 | `alpine` | 0,166 | 0,456 |
-| `distroless` | — | 0,578 (n = 55) |
+| `distroless` | 0,586 (n = 55) | 0,578 (n = 55) |
 
-Wszystkie p < 10⁻¹¹.
+Wszystkie p < 10⁻¹¹ poza wierszem `distroless` (n = 55, p < 10⁻⁵).
 
 ![CVE vs rozmiar](../figures/5_4_cve_vs_size.png)
 
@@ -388,15 +395,16 @@ nazwą roli, a nie numerem.
 
 ### 5.7 Wiek tagu
 
-Spearman ρ (wiek w dniach ~ CVE), tylko Docker Hub, wiek liczony od najnowszego tagu w próbie
-(06.10.2026):
+Spearman ρ (wiek w dniach ~ CVE), wiek liczony od najnowszego tagu w próbie (06.10.2026).
+Przeliczone 26.10.2026 po uzupełnieniu dat distroless:
 
 | Klasa | n | ρ |
 | --- | --- | --- |
-| wszystkie | 9 700 | 0,104 |
-| `standard` | 6 223 | 0,135 |
-| `slim` | 1 683 | **−0,144** |
-| `alpine` | 1 794 | 0,288 |
+| wszystkie | 9 755 | 0,105 |
+| `standard` | 6 223 | 0,133 |
+| `slim` | 1 683 | **−0,145** |
+| `alpine` | 1 794 | 0,287 |
+| `distroless` | 55 | 0,208 (p = 0,13) |
 
 ![CVE vs wiek tagu](../figures/5_7_cve_vs_age.png)
 
@@ -406,7 +414,8 @@ W obrębie gałęzi CVE rośnie z wiekiem (starszy build = więcej znanych dziś
 gałęzie leżą na różnych poziomach. Najwyższa gałąź (do 17 500 CVE) to pełne obrazy na
 `bullseye`. W `slim` korelacja jest nawet ujemna, bo nowe obrazy `slim` mają nowsze runtime'y z
 większą liczbą zależności. Wiek tagu bez kontroli technologii i bazy nie jest dobrym
-predyktorem.
+predyktorem. W distroless związek jest nieistotny (p = 0,13): liczbę CVE wyznacza tu głównie
+linia Debiana i technologia, a nie data obrazu.
 
 ---
 
@@ -551,12 +560,12 @@ porządek, ale nie jest reprezentatywne dla całego ekosystemu.
 `base-nossl`, `cc`), `node` (13), `python` (7), `openjdk` (2). Java 17+ na `debian12`/`13` nie ma
 partnera (brak stabilnych tagów `openjdk`), więc 14 z 15 obrazów Javy jest tylko w opisie.
 
-| Partner | Pary | Mediana ΔCVE | Mediana ΔCVE % | Mediana Δpakietów % |
-| --- | --- | --- | --- | --- |
-| `node` | 13 | −8 712 | −98,9% | −98,3% |
-| `python` | 7 | −3 139 | −95,8% | −94,2% |
-| `debian` | 18 | −154 | −85,3% | −92,5% |
-| `openjdk` | 2 | −1 283 | −84,9% | −85,6% |
+| Partner | Pary | Mediana ΔCVE | Mediana ΔCVE % | Mediana Δpakietów % | Mediana Δrozmiaru % |
+| --- | --- | --- | --- | --- | --- |
+| `node` | 13 | −8 712 | −98,9% | −98,3% | −87,2% |
+| `python` | 7 | −3 139 | −95,8% | −94,2% | −94,1% |
+| `debian` | 18 | −154 | −85,3% | −92,5% | −82,9% |
+| `openjdk` | 2 | −1 283 | −84,9% | −85,6% | −50,3% |
 
 Wybrane pary:
 
@@ -601,10 +610,10 @@ Wybrane pary:
 | --- | --- | --- | --- | --- |
 | `slim` | −41,9% | −57,4% | 0 z 1 507 | 0 z 1 507 |
 | `alpine` | −64,8% | −51,5% | 0 z 1 315 | 1 209 z 1 315 (zamiana na `apk`) |
-| `distroless` | −94,5% | brak danych | 35 z 40 | 40 z 40 |
+| `distroless` | −94,5% | −87,4% | 35 z 40 | 40 z 40 |
 
 Per repozytorium (mediany): `slim` −53% CVE / −53% pakietów / −63% rozmiaru; `alpine` −91% / −61%
-/ −44%; `distroless` −91% / −93% / brak danych.
+/ −44%; `distroless` −91% / −93% / −85%.
 
 ![Trade-off — pary](../figures/7_1_tradeoff_scatter.png)
 
@@ -671,15 +680,17 @@ Najmniej CVE przy niezerowej liczbie pakietów w distroless: `static-debian13` (
    poprawką. Część przewagi `alpine` może być artefaktem danych.
 4. **Pary między dystrybucjami.** `alpine` dołącza do grupy najnowszego `standard`, który może
    stać na UBI, `scratch` albo już na Alpine. Takie pary nie mierzą utwardzania jednej bazy.
-5. **Brak rozmiaru distroless.** Wszystkie 55 obrazów ma puste `arch_size`.
+5. **Rozmiar distroless uzupełniony po kampanii.** Potok nie zapisał `arch_size` dla `gcr.io`;
+   wartości dopisano 26.10.2026 z manifestów (`src/GcrMeta.py`), bez wpływu na skany.
 6. **Distroless n = 4 repozytoria.** Test per repozytorium nie może osiągnąć p < 0,05.
 7. **Friedman z 8 repozytoriów.** Porządek potwierdzony, reprezentatywność ograniczona.
 8. **Przesunięcie próby w stronę nowszych obrazów** przez sondę lustra (58% kandydatów odpadło)
    i 168 porażek skanu (1,7%, w tym 53 obrazy z 2016 r.).
 9. **Liczba pakietów** obejmuje pakiety języków, nie tylko systemowe.
-10. **Brak wieku distroless.** Config każdego obrazu distroless ma `created = 1970-01-01`
-    (wyzerowane znaczniki przy odtwarzalnym buildzie Bazela), a `gcr.io` nie podaje daty
-    wypchnięcia tagu. Dlatego analiza wieku (5.7) obejmuje tylko Docker Hub.
+10. **Wiek distroless z innego pola niż na Hubie.** Config obrazów distroless ma
+    `created = 1970-01-01` (odtwarzalny build Bazela), więc wiek wzięto z `timeUploadedMs`
+    przeskanowanego digestu w `gcr.io/v2/<repo>/tags/list` (uzupełnione 26.10.2026). Na Hubie
+    jest to data publikacji tagu — obie miary oznaczają moment opublikowania obrazu.
 
 ---
 
