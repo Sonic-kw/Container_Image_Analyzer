@@ -736,3 +736,175 @@ tylko dla kilku technologii. `slim` daje około 53%, ale efekt silnie zależy od
 redukcja wynosi 79–96%, w 10 repozytoriach 19–64%, a w 3 mediana jest równa zero, m.in. w `debian`,
 gdzie rozmiar maleje mimo braku zmiany liczby pakietów w większości par. Liczba CVE koreluje umiarkowanie z rozmiarem i liczbą pakietów (ρ ≈ 0,6) i słabo z wiekiem
 tagu (ρ ≈ 0,1); silniej zależy od bazy, na której obraz stoi.
+
+---
+
+## 11. Badanie uzupełniające: konfiguracja uruchomieniowa (APD 6–7, uwaga promotora o tytule)
+
+Przeprowadzone 17.11.2026 (`src/Runtime.py`, plan w `POPRAWKI.md`). Pytanie badawcze: jak klasa obrazu wpływa na powierzchnię ataku i działanie aplikacji w **uruchomionym** kontenerze, przy domyślnej i przy ograniczonej konfiguracji uruchomieniowej. Nie jest to powtórzenie kampanii, tylko pomiar na jednej grupie obrazów.
+
+### 11.1 Warunki
+
+| | |
+| --- | --- |
+| Obrazy | grupa `library/python:3.13:-:debian13` z kampanii, te same digesty (`results/scans.jsonl`) |
+| Aplikacja | `src/runtime/app.py`: serwer HTTP z biblioteki standardowej; `/` sprawdza działanie, `/probe` raportuje, co może zrobić kod w procesie aplikacji |
+| Profile | P0 domyślny; P1 `--user 65532:65532`; P2 = P1 + `--cap-drop ALL --security-opt no-new-privileges`; P3 = P2 + `--read-only --tmpfs /tmp --pids-limit 64 --memory 256m`; PX `--privileged` |
+| Powtórzenia | 3 dla każdej z 20 konfiguracji (60 uruchomień) |
+| Środowisko | Docker Desktop, Docker Engine 28.5.1, jądro 6.6.87.2-microsoft-standard-WSL2, cgroup v2 |
+| Skan | Trivy `v0.75.0`, zamrożona baza z kampanii (`UpdatedAt` 2026-10-10T12:33:35Z), obraz z pliku tar w kontenerze `cia-scanner` |
+
+Pliki wynikowe: `results/runtime_probe.jsonl` (60 wierszy), `results/runtime_scan.jsonl`, `results/runtime_summary.json` i wykres `figures/6_7_runtime_matrix.{pgf,png}`.
+
+### 11.2 Kontrola: warstwa aplikacji nie zmienia profilu CVE
+
+| Klasa | Obraz bazowy | CVE (sonda / kampania) | Pakiety (sonda / kampania) |
+| --- | --- | --- | --- |
+| `standard` | `python:3.13.16-trixie` | 3 248 / 3 248 | 488 / 488 |
+| `slim` | `python:3.13.16-slim-trixie` | 172 / 172 | 106 / 106 |
+| `alpine` | `python:3.13.16-alpine3.23` | 7 / 7 | 48 / 48 |
+| `distroless` | `distroless/python3-debian13` | 168 / 168 | 38 / 38 |
+
+### 11.3 Możliwości napastnika w 20 konfiguracjach
+
+Miara jest własna i operacyjna: 12 wskaźników zero-jedynkowych o równej wadze:
+- proces działa jako root;
+- zapis do systemu plików obrazu (`/` lub `/usr`);
+- powłoka;
+- menedżer pakietów;
+- `curl` lub `wget`;
+- kompilator;
+- pliki setuid przy `NoNewPrivs: 0`;
+- gniazdo surowe;
+- `chown` na cudzy UID;
+- odczyt `/etc/shadow`;
+- brak limitu procesów lub pamięci;
+- profil seccomp słabszy niż w P0 tego samego obrazu.
+
+| Klasa | P0 | P1 | P2 | P3 | PX |
+| --- | --- | --- | --- | --- | --- |
+| `standard` | 11 | 6 | 5 | 4 | 12 |
+| `slim` | 9 | 4 | 3 | 2 | 10 |
+| `alpine` | 9 | 4 | 4 | 3 | 10 |
+| `distroless` | 5 | 1 | 1 | 0 | 6 |
+
+We wszystkich 60 uruchomieniach aplikacja działała (`/` zwróciło `ok`). Trzy powtórzenia każdej konfiguracji dały identyczny wynik sondy.
+
+Zawartość obrazów (profil P0):
+
+| Klasa | Powłoka | Menedżer pakietów | Pobieranie | Kompilator | Pliki setuid |
+| --- | --- | --- | --- | --- | --- |
+| `standard` | `sh`, `bash`, `dash` | `apt-get`, `apt`, `dpkg` | `curl`, `wget` | `gcc`, `cc` | 8 (`su`, `passwd`, `mount`, `umount`, `chfn`, `chsh`, `gpasswd`, `newgrp`) |
+| `slim` | `sh`, `bash`, `dash` | `apt-get`, `apt`, `dpkg` | brak | brak | te same 8 |
+| `alpine` | `sh`, `ash` (BusyBox) | `apk` | `wget` (BusyBox) | brak | 0 |
+| `distroless` | brak | brak | brak | brak | 0 (brak też `/etc/shadow`) |
+
+Uprawnienia procesu są takie same we wszystkich klasach:
+
+| Profil | `CapEff` | Zbiór ograniczający | `NoNewPrivs` | Filtry seccomp |
+| --- | --- | --- | --- | --- |
+| P0 | 14 | 14 | 0 | 2 |
+| P1 | 0 | 14 | 0 | 2 |
+| P2, P3 | 0 | 0 | 1 | 2 |
+| PX | 41 | 41 | 0 | 1 |
+
+### 11.4 Omówienie
+
+- **Konfiguracja odbiera uprawnienia, a obraz odbiera narzędzia.**
+  - Przejście P0 → P1 usuwa w każdej klasie root, zapis do systemu plików, gniazdo surowe i `chown`, a tam, gdzie plik istnieje, także odczyt `/etc/shadow`.
+  - P2 wyłącza działanie plików setuid (`no-new-privileges`). Zmienia to wynik tylko w `standard` i `slim`, bo tylko one mają takie pliki.
+  - P3 dokłada limity zasobów.
+  - Żaden profil nie usuwa powłoki, menedżera pakietów ani kompilatora. Usuwa je tylko wybór klasy obrazu.
+- **Po pełnym ograniczeniu (P3) zostają narzędzia z obrazu:** `standard` 4 (powłoka, `apt`, `curl`/`wget`, kompilator), `alpine` 3 (powłoka, `apk`, `wget`), `slim` 2 (powłoka, `apt`), distroless 0.
+- **Żadna metoda nie wystarcza sama.**
+  - Distroless w P0 (5) daje napastnikowi więcej niż `slim` w P3 (2): działa jako root, z zapisem do systemu plików, gniazdem surowym i `chown`, bez limitów.
+  - `standard` w P3 nadal daje powłokę, menedżer pakietów, narzędzia pobierania i kompilator.
+- **Kolejność `alpine` i `slim` jest inna niż w liczbie CVE.** W P2–P3 `alpine` ma o jedną możliwość więcej niż `slim` (`wget` z BusyBox), choć ma mniej CVE (7 wobec 172) i mniej pakietów. Liczba CVE i możliwości napastnika po przejęciu procesu to różne osie powierzchni ataku.
+- **Tryb uprzywilejowany (PX)** daje maksimum w każdej klasie: 41 uprawnień i słabszy seccomp.
+- **Koszt funkcjonalny w tym badaniu był zerowy:** prosta aplikacja z biblioteki standardowej działała w każdym profilu. Nie przenosi się to na aplikacje, które zapisują pliki poza `/tmp`, wiążą porty poniżej 1024, potrzebują powłoki w skryptach startowych albo instalują pakiety w czasie działania.
+
+### 11.5 Zastrzeżenia
+
+- Jedna grupa obrazów (Python 3.13) i jedna, prosta aplikacja. Jest to studium przypadku bez testów statystycznych.
+- Wskaźniki mówią o dostępności narzędzia lub uprawnienia, a nie o udanym ataku. Wagi są równe, a wybór 12 wskaźników jest decyzją autora (uzasadnienie każdego w literaturze, rozdz. 2).
+- Docker Desktop (WSL2): silnik działa już pod jednym filtrem seccomp, więc nawet `--privileged` zostawia `Seccomp: 2` z jednym filtrem. Na natywnym Linuksie PX miałby prawdopodobnie seccomp całkowicie wyłączony (niesprawdzone).
+- Pliki setuid są szukane tylko w katalogach z programami (`/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`), bez schodzenia w podkatalogi.
+- UID 65532 to nieuprzywilejowany identyfikator z wariantu `nonroot` distroless. W pozostałych obrazach ten użytkownik nie ma wpisu w `/etc/passwd`, co aplikacji nie przeszkadzało.
+- Orkiestrator (np. Kubernetes) i host nie były mierzone.
+
+### 11.6 Rozszerzenie (18.11.2026): pojedyncze ustawienia konfiguracji
+
+Profile P1–P3 kumulują ustawienia, więc nie da się z nich odczytać wkładu każdego ustawienia osobno. Po decyzji autora z 18.11.2026 dodano pięć profili, w których jedno ustawienie nakłada się na konfigurację domyślną P0. Użytkownika nieuprzywilejowanego osobno mierzy już P1.
+
+| Profil | Opcje `docker run` |
+| --- | --- |
+| SC | `--cap-drop ALL` |
+| SN | `--security-opt no-new-privileges` |
+| SR | `--read-only --tmpfs /tmp` |
+| SL | `--pids-limit 64 --memory 256m` |
+| SU | `--security-opt seccomp=unconfined` (osłabienie: wyłączenie domyślnego profilu seccomp) |
+
+**Przebieg.** Cały zestaw 10 profili uruchomiono ponownie 18.11.2026: 4 obrazy × 10 profili × 3 powtórzenia, czyli 120 uruchomień, na Docker Engine 28.5.1. Wszystkie 120 uruchomień działało, a trzy powtórzenia dały identyczne wyniki. Wyniki profili P0–PX są identyczne z przebiegiem z 17.11 (porównanie `runtime_summary_2026-11-17.json` z `runtime_summary.json`). Pliki: `results/runtime_probe.jsonl` (120 wierszy), `results/runtime_single_effects.json`. Kopia przebiegu z 17.11: `results/runtime_probe_2026-11-17.jsonl`.
+
+**Liczba możliwości napastnika (z 12) i wskaźniki, które zmienia każde ustawienie względem P0:**
+
+| Ustawienie | Zmienione wskaźniki | `standard` | `slim` | `alpine` | `distroless` |
+| --- | --- | --- | --- | --- | --- |
+| P0 (punkt odniesienia) | — | 11 | 9 | 9 | 5 |
+| P1 użytkownik 65532 | usuwa: root, zapis, gniazdo surowe, `chown`, odczyt `/etc/shadow` (w distroless brak pliku) | 6 | 4 | 4 | 1 |
+| SC `--cap-drop ALL` | usuwa: gniazdo surowe, `chown` | 9 | 7 | 7 | 3 |
+| SN `no-new-privileges` | usuwa: pliki setuid (tylko `standard`, `slim`) | 10 | 8 | 9 | 5 |
+| SR `--read-only` | usuwa: zapis do systemu plików | 10 | 8 | 8 | 4 |
+| SL limity | usuwa: brak limitów | 10 | 8 | 8 | 4 |
+| SU `seccomp=unconfined` | dodaje: słabszy filtr seccomp | 12 | 10 | 10 | 6 |
+
+**Obserwacje.**
+- Najwięcej usuwa samo uruchomienie jako użytkownik nieuprzywilejowany: 5 wskaźników (4 w distroless). Odebranie uprawnień jądra przy procesie działającym jako `root` usuwa tylko dwa (gniazdo surowe, `chown`). Proces root nadal zapisuje w `/` i czyta `/etc/shadow`, bo jest właścicielem tych plików i nie potrzebuje do tego dodatkowych uprawnień jądra.
+- `no-new-privileges` zmienia wynik tylko w obrazach z plikami setuid (`standard`, `slim`). W `alpine` i distroless nie ma czego wyłączać.
+- `--read-only` i limity usuwają po jednym wskaźniku w każdej klasie, niezależnie od obrazu.
+- `seccomp=unconfined` osłabia konfigurację w każdej klasie. W Docker Desktop liczba filtrów spada z 2 do 1 (ten sam efekt co w PX).
+- Żadne pojedyncze ustawienie nie zmienia wskaźników narzędzi (powłoka, menedżer pakietów, pobieranie, kompilator). To potwierdza obserwację z §11.4.
+- Pojedyncze ustawienia sumują się do wyniku profili P2 i P3. Na przykład w `standard`: P1 (−5), SC i SN po P1 dają P2 (−1, bo SC przy UID 65532 niczego już nie zmienia), SR i SL dają P3 (−1, bo zapis usunął już P1). Wkłady się nakładają, więc nie są addytywne.
+
+**Zastrzeżenie.** Wskaźniki są zero-jedynkowe, więc nie pokazują np. liczby wywołań systemowych blokowanych przez seccomp. Wpływ seccomp jest mierzony tylko liczbą filtrów.
+
+---
+
+## 12. Zliczenie pomocnicze: wersje CVSS w raportach kampanii (17.11.2026)
+
+Cel: uzasadnienie użycia CVSS v3.1 zamiast v4.0 (uwaga promotora pkt 8). Zliczenie objęło wszystkie 9 755 raportów
+(`reports/w*/*.json.gz`) i wszystkie 15 565 035 dopasowań podatność–pakiet. Ta liczba jest równa sumie `cve_total`
+w `results/scans.jsonl`. Dla każdego dopasowania sprawdzono, czy którekolwiek źródło w polu `CVSS` raportu Trivy
+podaje ocenę danej wersji. Skrypt: `szkice/cvss_versions.py`.
+
+| Ocena w co najmniej jednym źródle | Dopasowania | Udział |
+| --- | --- | --- |
+| CVSS v3.x (`V3Score`) | 13 909 252 | 89,4% |
+| CVSS v2 (`V2Score`) | 2 158 995 | 13,9% |
+| CVSS v4.0 (`V40Score`) | 557 720 | 3,6% |
+| tylko v4.0, bez v3.x | 8 301 | 0,05% |
+| brak jakiejkolwiek oceny CVSS | 1 571 842 | 10,1% |
+
+Kategorie nie sumują się do 100%, bo jedno dopasowanie może mieć oceny kilku wersji z różnych źródeł.
+Jest to nowa liczba spoza `analysis_summary.json`, policzona z istniejących raportów bez ponownego skanowania.
+
+---
+
+## 13. Zliczenie pomocnicze: rozbiór 386 obrazów z 0 CVE (17.11.2026)
+
+Uwaga promotora pkt 6: wyjaśnienie zer obejmowało 121 + 192 z 386 obrazów. System odczytano z pola `Metadata.OS`
+raportów Trivy. Skrypt: `szkice/zeros_breakdown.py`. Bez ponownego skanowania.
+
+| Grupa | Obrazy | Repozytoria (najliczniejsze) |
+| --- | --- | --- |
+| brak rozpoznanych pakietów | 121 | `archlinux` 50, `busybox` 27, `fedora` 21 |
+| Debian z oznaczeniem `/sid` (wydania testowe) | 192 | `debian` 154, `openjdk` 16, `java` 8, `buildpack-deps` 6, `r-base` 5, `rust` 3 |
+| Amazon Linux (2, 2022, 2023) | 28 | `amazoncorretto` 15, `jetty` 6, `maven` 5, `amazonlinux` 2 |
+| Alpine (głównie wydania po zakończeniu wsparcia, jedno przedpremierowe) | 13 | `alpine` 7, `eclipse-mosquitto` 2, `haxe` 2 |
+| Red Hat i pochodne (UBI 10, Scientific Linux) | 13 | `eclipse-temurin` 9, `swift` 2, `sl` 2 |
+| Ubuntu (14.04, 16.04, 18.04, 20.10, 21.04, 24.10) | 11 | `gazebo` 2, `ros` 2, `swift` 2, `ubuntu` 3 |
+| inne (Mageia, Oracle Linux, EulerOS, Photon, `static-debian13`) | 8 | |
+| **Razem** | **386** | |
+
+Przyczyn braku dopasowań w grupach poza `/sid` i „brak pakietów” nie badano. Ubuntu i większość wersji Alpine
+w tej grupie to wydania po zakończeniu standardowego wsparcia. `static-debian13` ma 6 pakietów i brak dopasowań.

@@ -12,6 +12,7 @@ Klasy `standard` / `slim` / `alpine` / `distroless` są własną taksonomią bad
 | 4 | Distroless (Google) | opracowane (README, `SUPPORT_POLICY.md`, `base/README.md`, stan 10.2026) | rozdz. 2.3, 3, studium w rozdz. 5 |
 | 5 | CVSS v3.1 (FIRST), 2019 | opracowane | rozdz. 3 i 5 |
 | 6 | SLSA (slsa.dev, spec v1.0 i v1.2) | opracowane | rozdz. 2.4, metodyka (digest, punkt w czasie) |
+| 7 | Literatura uzupełniająca: 11 artykułów i dokumentacja (17.11.2026) | 10 artykułów sprawdzonych w pełnych tekstach; Confine i CIS z abstraktu lub strony | rozdz. 2 (warstwy środowiska, przegląd literatury), 3.5, badanie uzupełniające |
 
 ---
 
@@ -567,6 +568,181 @@ Brakuje tu też tego, co mierzy praca: liczby znanych podatności w artefakcie. 
 - poziomu SLSA badanych obrazów; nie był oceniany;
 - tezy, że pin digestem „spełnia SLSA”; pin wykorzystuje tę samą tożsamość artefaktu, ale bez pochodzenia i bez podpisu żaden poziom nie jest osiągnięty;
 - czegokolwiek o wariantach `slim`, `alpine`, `distroless`.
+
+---
+
+## 7. Literatura uzupełniająca (dodana 17.11.2026, uwaga promotora pkt 2 i 5)
+
+Pozycje dodane po uwagach promotora: brak artykułów naukowych oraz rozjazd tytułu („środowiska kontenerowe”) z zakresem pomiaru. Klucze odpowiadają `szkice/bibliography_propozycja.bib`. Preprint Wist, Helsem, Gligoroski (arXiv 2006.02932) usunięto 17.11.2026 decyzją autora, bo nie ma wersji recenzowanej.
+
+**Stan notatek.**
+- Dane bibliograficzne sprawdzono w Crossref (DOI).
+- Treść 10 artykułów sprawdzono w pełnych tekstach z `szkice/literatura/` (wersje wydawców z dostępu PWr; Liu i in. ze strony grupy autorów).
+- Numery stron w notatkach to strony z paginacji wydawnictwa.
+- Do sprawdzenia zostają:
+  - **Ghavamnia i in. (Confine):** brak pliku, notatka z abstraktu na stronie USENIX;
+  - **CIS Docker Benchmark:** brak pliku PDF.
+- Liczby z tych prac nie są porównywalne z kampanią: inny skaner, inna data bazy podatności, inna próba.
+
+| Klucz | Praca | Typ | Pełny tekst | Gdzie w pracy |
+| --- | --- | --- | --- | --- |
+| `shu2017` | Shu, Gu, Enck, CODASPY 2017 | konferencja ACM | tak | przegląd literatury; wstęp (łańcuch dostaw) |
+| `zerouali2019` | Zerouali i in., SANER 2019 | konferencja IEEE | tak | przegląd literatury; 5.2 świeżość |
+| `liu2020` | Liu i in., ESORICS 2020 | konferencja, LNCS | tak | przegląd literatury; ryzyko „niezaufane obrazy”; konfiguracja uruchomienia jako źródło ryzyka |
+| `combe2016` | Combe, Martin, Di Pietro, IEEE Cloud Computing 2016 | czasopismo | tak | 2.x warstwy środowiska; antywzorce (`docker.sock`) |
+| `martin2018` | Martin i in., Computer Communications 2018 | czasopismo | tak | 2.x warstwy środowiska |
+| `sultan2019` | Sultan, Ahmad, Dimitriou, IEEE Access 2019 | czasopismo (przegląd) | tak | 2.x warstwy środowiska (podział przypadków ochrony) |
+| `lin2018` | Lin i in., ACSAC 2018 | konferencja ACM | tak | 2.x uprawnienia jądra i seccomp; 3.x uzasadnienie profili badania uzupełniającego |
+| `shamim2020` | Shamim, Bhuiyan, Rahman, IEEE SecDev 2020 | konferencja IEEE | tak | 2.x warstwa orkiestratora |
+| `rastogi2017` | Rastogi i in., ESEC/FSE 2017 | konferencja ACM | tak | 2.3 metody optymalizacji artefaktów (APD zad. 2) |
+| `ghavamnia2020` | Ghavamnia i in., RAID 2020 | konferencja USENIX | **nie** (abstrakt) | 2.x seccomp; dalsze prace |
+| `javed2021` | Javed, Toor, ICCBDC 2021 | konferencja ACM | tak | 3.5 przegląd skanerów (APD zad. 2); ograniczenie „jeden skaner” |
+
+### 7.1 Podatności w obrazach Docker Hub
+
+**Shu, Gu, Enck (2017), `shu2017`.**
+- Narzędzie DIVA automatycznie wyszukuje, pobiera i analizuje obrazy z Docker Hub. Podatności wykrywano skanerem Clair (s. 271). Analizę wykonano pod koniec kwietnia 2016 r. (s. 273).
+- Zbiór: 86 066 repozytoriów i 356 218 obrazów, w tym 3 802 obrazy z 98 repozytoriów oficjalnych (s. 273).
+- Ustalenia:
+  - średnio ponad 180 podatności na obraz przy uwzględnieniu wszystkich wersji;
+  - ponad 80% obrazów oficjalnych i społecznościowych ma co najmniej jedną podatność wysokiej krytyczności;
+  - wiele obrazów nieaktualizowanych od setek dni, ale najnowsze wersje obrazów oficjalnych są lepiej utrzymane;
+  - podatności często przechodzą z obrazu nadrzędnego na potomny (s. 269–270).
+- Tabela 3 (s. 274), liczba podatności na obraz, średnia i mediana:
+
+  | Zbiór | Średnia | Mediana |
+  | --- | --- | --- |
+  | obrazy społecznościowe | 199 | 158 |
+  | społecznościowe `:latest` | 196 | 153 |
+  | obrazy oficjalne | 185 | 127 |
+  | oficjalne `:latest` (93 obrazy) | 76 | 76 |
+
+- Do pracy: obraz bazowy przenosi podatności na obrazy zbudowane na nim (wstęp, łańcuch dostaw). Obrazy oficjalne są lepiej utrzymywane (tło wyboru populacji). Pozycjonuje pracę: liczono podatności w ekosystemie, ale bez porównania wariantów tej samej technologii.
+- Czego nie wyciągać: porównania liczb z kampanią (Clair, dane z 2016 r.); tez o `slim`/`alpine`/distroless.
+
+**Zerouali, Mens, Robles, Gonzalez-Barahona (2019), `zerouali2019`.**
+- Zbiór: 7 380 obrazów oficjalnych i społecznościowych opartych na Debianie (s. 493).
+- Miara opóźnienia technicznego (technical lag): różnica względem najnowszych wydań tych samych pakietów, liczona w wersjach, podatnościach i błędach. Podatności i ich krytyczność pochodzą z Debian Security Tracker (s. 498).
+- Wniosek autorów: żadne wydanie nie jest wolne od podatności, nawet obrazy z aktualnymi pakietami mogą mieć ich wiele (s. 499). Tabela V pokazuje najbardziej podatne obrazy oficjalne i społecznościowe (s. 497).
+- Do pracy: tło dla analizy świeżości (5.2) i tezy, że liczba CVE zależy od bazy i jej aktualności. Ta sama baza porad (Debian Security Tracker) co dla obrazów debianowych w kampanii.
+- Czego nie wyciągać: tez o wariantach obrazów; wyniki dotyczą tylko obrazów opartych na Debianie.
+
+**Liu i in. (2020), `liu2020`.**
+- Zbiór: 2 227 244 obrazów z 975 858 repozytoriów, wszystkie publiczne metadane (s. 259). Podatności wykrywano skanerem Anchore (s. 263, 268).
+- Ustalenia:
+  - polecenia uruchomienia z wrażliwymi parametrami szkodzą użytkownikom i hostowi (wyciek plików hosta, odmowa usługi);
+  - 42 złośliwe obrazy (zdalne wykonanie kodu, kopanie kryptowalut);
+  - łatanie oprogramowania w obrazach jest znacznie opóźnione albo pomijane.
+- Do pracy: konfiguracja uruchomienia jest osobnym źródłem ryzyka obok zawartości obrazu (rama warstw środowiska). Ryzyko „niezaufanych obrazów” według NIST ma potwierdzenie empiryczne.
+- Czego nie wyciągać: przenoszenia złośliwych obrazów na obrazy oficjalne.
+
+### 7.2 Bezpieczeństwo środowiska kontenerowego
+
+**Combe, Martin, Di Pietro (2016), `combe2016`.**
+- Przegląd ekosystemu Dockera i skutków jego użycia dla bezpieczeństwa, z modelem napastnika (s. 59). Napastnik bezpośredni atakuje kontenery, system hosta, demona Dockera i sieć. Pośredni wykorzystuje ekosystem: repozytoria kodu i obrazów.
+- Domyślnie włączone są izolacja przestrzeni nazw i odebranie części uprawnień jądra. Limity cgroups trzeba włączać dla każdego kontenera osobno (s. 57).
+- Dostęp do gniazda demona (`/var/run/docker.sock`) pozwala uruchomić dowolny kontener w trybie uprzywilejowanym, czyli uzyskać roota na hoście (s. 58).
+- Do pracy: rama warstw środowiska (kontener, host, demon, rejestr); antywzorce `docker.sock` i `--privileged`; uzasadnienie limitów zasobów w profilu P3.
+- Czego nie wyciągać: aktualnego stanu domyślnych ustawień Dockera (artykuł z 2016 r.); tez o wariantach obrazów.
+
+**Martin, Raponi, Combe, Di Pietro (2018), `martin2018`.**
+- Rozszerzenie analizy z Combe i in.:
+  - przegląd prac w kategoriach bezpieczeństwa;
+  - architektura Dockera;
+  - analiza podatności dla trzech typowych przypadków użycia, z tym samym modelem napastnika bezpośredniego i pośredniego (s. 38);
+  - podatności Docker Hub jako repozytorium pakietów i potoku automatycznego budowania (s. 39).
+- W przeglądzie omawia też wyniki Shu i in. (s. 34).
+- Do pracy: środowisko kontenerowe składa się z wielu elementów (obraz, rejestr, demon, host, sieć), z których każdy ma własne podatności.
+- Czego nie wyciągać: oceny wariantów obrazów.
+
+**Sultan, Ahmad, Dimitriou (2019), `sultan2019`.**
+- Przegląd literatury. Cztery przypadki ochrony:
+  - (I) kontenera przed aplikacją w nim;
+  - (II) kontenerów przed sobą nawzajem;
+  - (III) hosta przed kontenerami;
+  - (IV) kontenerów przed złośliwym hostem.
+- Przypadki I–III opierają się na mechanizmach jądra (przestrzenie nazw, cgroups, uprawnienia jądra, seccomp) i modułach LSM, a przypadek IV na sprzęcie (TPM, Intel SGX). Seccomp jest dokładniejszy od uprawnień jądra, bo filtruje pojedyncze wywołania systemowe (s. 52984).
+- Do pracy: oś podziału metod utwardzania w rozdz. 2. Badanie uzupełniające dotyczy przypadków I i III.
+- Czego nie wyciągać: rankingu metod; przegląd go nie podaje.
+
+**Lin i in. (2018), `lin2018`.**
+- Zbiór 223 exploitów, z czego 88 typowych wybrano do testu. 50 (56,82%) skutecznie atakuje z wnętrza kontenera przy domyślnej konfiguracji Dockera (s. 418–419). Testy na Docker 17.09.1-ce z seccomp, uprawnieniami jądra i MAC (s. 422).
+- Przed eskalacją uprawnień chronią bardziej mechanizmy jądra (uprawnienia jądra, seccomp, MAC) niż mechanizmy izolacji (przestrzenie nazw, cgroups) (s. 425). Ich wzajemna zależność może osłabiać ochronę („efekt najkrótszej klepki”).
+- Na 11 exploitach, które nadal łamią izolację, autorzy opisują 4-etapowy model ataku i proponują obronę.
+- Do pracy: główne uzasadnienie profili P1–P3 (odebranie uprawnień jądra, `no-new-privileges`, seccomp) i tezy, że konfiguracja uruchomienia jest metodą utwardzania środowiska.
+- Czego nie wyciągać: twierdzenia, że profile P1–P3 blokują te exploity, bo ich nie testowano. 56,82% dotyczy ich zbioru exploitów i środowiska z 2018 r.
+
+**Shamim, Bhuiyan, Rahman (2020), `shamim2020`.**
+- Przegląd literatury szarej: 104 materiały (90,38% to wpisy blogowe), z których wynika 11 praktyk (s. 60–62). W nawiasach liczba materiałów:
+  1. uwierzytelnianie i autoryzacja (82);
+  2. polityki bezpieczeństwa specyficzne dla Kubernetesa (81), w tym polityki sieci i podów (kontekst bezpieczeństwa podów i kontenerów);
+  3. skanowanie podatności, także obrazów w rejestrze (63);
+  4. logowanie (47);
+  5. separacja przestrzeni nazw (36);
+  6. szyfrowanie i ograniczenie dostępu do `etcd` (34);
+  7. ciągła aktualizacja (28);
+  8. limity CPU i pamięci (18);
+  9. SSL/TLS (18);
+  10. wydzielenie wrażliwych obciążeń (14);
+  11. zabezpieczenie dostępu do metadanych (9).
+- Do pracy: jakościowy opis warstwy orkiestratora. Praktyki 2 i 8 odpowiadają profilom uruchomienia z badania uzupełniającego, a praktyka 3 skanowaniu obrazów.
+- Czego nie wyciągać: oceny skuteczności praktyk; to systematyzacja, nie pomiar.
+
+### 7.3 Zmniejszanie powierzchni ataku i jakość skanerów
+
+**Rastogi i in. (2017), `rastogi2017`.**
+- Cimplifier dzieli kontener na prostsze kontenery z samymi potrzebnymi zasobami, zgodnie z zasadą najmniejszych uprawnień i separacji uprawnień. Używa **analizy dynamicznej**: wejściem są kontener, logi wywołań systemowych i polityka użytkownika (s. 477, 479).
+- Zachowuje działanie aplikacji i zmniejsza rozmiar obrazu do 95% (s. 476–477). Zbędne składniki zwiększają rozmiar i obniżają bezpieczeństwo, bo każdy może nieść własne podatności.
+- Do pracy: przykład metody optymalizacji artefaktu (APD zad. 2) obok budowy wieloetapowej i obrazów minimalnych.
+- Czego nie wyciągać: liczby CVE (artykuł mierzy rozmiar i działanie, nie podatności).
+
+**Ghavamnia i in. (2020), `ghavamnia2020`.** Notatka z abstraktu (brak pełnego tekstu):
+- Confine: statyczna analiza aplikacji i zależności wyznacza nadzbiór potrzebnych wywołań systemowych, z którego powstaje profil seccomp.
+- Na 150 obrazach w ponad połowie kontenerów wyłączono co najmniej 145 z 326 wywołań, co neutralizuje 51 znanych podatności jądra.
+- Do pracy: zmniejszanie powierzchni ataku na warstwie jądra; kierunek dalszych prac.
+- Czego nie wyciągać: tezy o skuteczności domyślnego profilu Dockera; szczegółów spoza abstraktu.
+
+**Javed, Toor (2021), `javed2021`, wersja ICCBDC.**
+- Ocena skanerów Clair, Anchore i Microscanner dwiema miarami: pokrycia wykrywania (Detection Coverage) i współczynnika trafień (Detection Hit Ratio, DHR). Badano najnowsze wersje 59 popularnych obrazów z aplikacjami Java (s. 95–96, 98).
+- Skanery nie wykrywały podatności w pakietach aplikacji. Najlepszy, Anchore (DHR 65,7%), pomijał około 34% (6 864) podatności pakietów **systemowych**, które wykryły Clair i Microscanner (s. 100).
+- Do pracy: przegląd skanerów (APD zad. 2) i ograniczenie „jeden skaner, jedna baza”: różne skanery dają różne wyniki dla tych samych obrazów.
+- Czego nie wyciągać: wniosków o Trivy (nie był badany); liczby 34% jako ogólnej skuteczności skanerów (dotyczy Anchore względem dwóch innych narzędzi w ich próbie).
+
+### 7.4 Specyfikacje i dokumentacja (stan 17.11.2026)
+
+| Klucz | Co potwierdza | Do pracy |
+| --- | --- | --- |
+| `cvss4` | CVSS v4.0, wersja 1.0 z 1.11.2023, dokument w wersji 1.2 z 18.06.2024. Cztery grupy metryk: Base, Threat, Environmental, Supplemental. Skala jakościowa taka sama jak w v3.x (0,1–3,9 / 4,0–6,9 / 7,0–8,9 / 9,0–10,0) | pkt 8 promotora: wzmianka o v4.0 i uzasadnienie v3.1 (APD wskazuje v3.1, skala jakościowa jest ta sama). W próbie 40 raportów kampanii (`reports/w0`) pola v3 wystąpiły 29 211 razy, a v4.0 1 097 razy (zliczenie pomocnicze, do potwierdzenia na całym zbiorze, jeśli trafi do pracy) |
+| `cveSyntax` | od 1.01.2014 część numeryczna identyfikatora ma 4 lub więcej cyfr, bez górnego limitu | pkt 8: format `CVE-YYYY-NNNN…` |
+| `cveAbout` | program CVE sponsoruje CISA; identyfikatory nadają i publikują CNA (organizacje partnerskie); stronę i listę prowadzi MITRE (zarchiwizowana strona „About CVE”) | pkt 8: „CVE Program (prowadzony przez MITRE) i CNA” zamiast „system MITRE”. Aktualna strona `cve.org` renderuje się skryptem: autor sprawdza ją w przeglądarce |
+| `epss` | EPSS (FIRST): prawdopodobieństwo wykorzystania opublikowanej CVE w ciągu 30 dni, publikowane codziennie | trendy w zarządzaniu podatnościami (APD zad. 1) |
+| `kev` | katalog KEV (CISA): podatności wykorzystywane w praktyce, zalecany jako wejście do priorytetyzacji | trendy (APD zad. 1); „liczba CVE to nie ryzyko” |
+| `ntiaSbom` | NTIA, 12.07.2021: minimalne elementy SBOM; SBOM jako formalny zapis składników i relacji w łańcuchu dostaw | trendy (APD zad. 1); `--list-all-pkgs` jako lista składników |
+| `cisDocker` | CIS Docker Benchmark, wersja 1.9.0 według strony CIS; PDF bezpłatny do użytku niekomercyjnego | warstwa konfiguracji uruchomieniowej. Numerów zaleceń nie cytować bez PDF |
+| `k8sPss` | Pod Security Standards: profile Privileged, Baseline, Restricted. Restricted wymaga m.in. `runAsNonRoot`, odrzucenia wszystkich uprawnień jądra (dozwolone tylko `NET_BIND_SERVICE`), `allowPrivilegeEscalation: false` i profilu seccomp `RuntimeDefault`/`Localhost` | odpowiednik profilu P3 na warstwie orkiestratora (opis jakościowy). Szczegóły Restricted sprawdzić na stronie, bo pobrany fragment był niepełny |
+| `dockerRun` | 14 domyślnych uprawnień jądra (m.in. `CHOWN`, `NET_RAW`, `SETUID`, `SYS_CHROOT`); `--privileged` daje wszystkie uprawnienia i dostęp do urządzeń hosta | profile P0 i PX; wynik `CapEff` 14 w P0 zgadza się z dokumentacją |
+| `dockerRunCli` | `--read-only`, `--security-opt no-new-privileges`, `--pids-limit`, `--memory`, `--user`, `--tmpfs` | opis profili P1–P3 |
+| `dockerSeccomp` | domyślny profil seccomp to lista dozwolonych wywołań; blokuje około 44 z ponad 300 wywołań systemowych | profil seccomp w P0–P3. Strona nie mówi, co robi z nim `--privileged`: w badaniu zmierzono spadek z 2 do 1 filtra |
+| `manNamespaces` | 8 typów przestrzeni nazw: cgroup, IPC, network, mount, PID, time (od Linuksa 5.6), user, UTS | pkt 8: brak `time` w obecnej liście |
+| `manNoNewPrivs` | `no_new_privs` wyłącza działanie bitów set-user-ID/set-group-ID i uprawnień plików przy `execve` | wynik P1 → P2 (pliki setuid w `standard` i `slim`) |
+| `manShadow` (dodane 19.11) | `shadow(5)`: plik z danymi haseł kont; nie może być czytelny dla zwykłych użytkowników, jeśli hasła mają pozostać bezpieczne | 2.2 i tab. 3.9, wskaźnik 10. Nie wyciągać: strona nie mówi nic o kontenerach ani o tym, kto czyta plik w konkretnym obrazie |
+| `mitreAttack` (dodane 19.11) | MITRE ATT&CK: ogólnodostępna baza wiedzy o taktykach i technikach napastników, oparta na obserwacjach rzeczywistych ataków | 2.2, wprowadzenie bazy. Nie wyciągać: ATT&CK nie podaje, jak często technika jest używana, ani nie ocenia ryzyka |
+| `attackT1105` (dodane 19.11) | T1105 Ingress Tool Transfer (taktyka Command and Control, wersja 2.6 z 11.09.2026): przeniesienie narzędzi z systemu zewnętrznego do przejętego środowiska; `curl` i `wget` wymienione jako narzędzia na Linuksie i macOS | 2.2 i tab. 3.9, wskaźnik 5. Nie wyciągać: technika jest przypisana do platform ESXi, Linux, Network Devices, Windows i macOS, a nie do „Containers”; brak `curl` nie uniemożliwia techniki (np. `urllib` w Pythonie) |
+| `attackT1003` (dodane 19.11) | T1003.008 /etc/passwd and /etc/shadow (wersja 1.2 z 4.11.2026): `/etc/shadow` zawiera skróty haseł, domyślnie czyta go tylko `root`; napastnik łączy oba pliki i łamie hasła poza systemem | 2.2 i tab. 3.9, wskaźnik 10. Nie wyciągać: badanie mierzy tylko możliwość odczytu pliku, a nie to, czy w obrazie są konta z hasłami |
+| `grype`, `clair`, `dockerScout` | Grype: skaner obrazów i systemów plików, przyjmuje SBOM (Syft), korzysta z EPSS, KEV i OpenVEX. Clair: statyczna analiza warstw obrazów przez API (projekt Quay). Docker Scout: SBOM obrazu dopasowywany do bazy podatności, dostęp przez Docker Hub, CLI i panel | krótkie porównanie skanerów w 3.5 (APD zad. 2). Wybór Trivy uzasadniać tym, co jest w `PLAN.md` |
+
+### 7.5 Rice: rozdziały potrzebne do warstw środowiska (sprawdzone w spisie treści 17.11.2026)
+
+| Rozdz. | Tytuł (strony) | Co tam jest | Do pracy |
+| --- | --- | --- | --- |
+| 2 | Linux System Calls, Permissions, and Capabilities (13–22) | wywołania systemowe, uprawnienia plików, setuid i setgid (s. 16), uprawnienia jądra (s. 19), eskalacja uprawnień (s. 21) | wskaźniki „pliki setuid” i „uprawnienia jądra” w badaniu uzupełniającym |
+| 3 | Control Groups (23–30) | cgroups | limity w profilu P3 |
+| 4 | Container Isolation (31–53) | przestrzenie nazw, zmiana katalogu głównego (s. 38), procesy kontenera z perspektywy hosta (s. 50) | 2.1; rysunek z s. 51 pochodzi z tego rozdziału |
+| 5 | Virtual Machines (55–63) | nadzorca, izolacja procesów, porównanie izolacji kontenera i VM (s. 63) | **w pracy cytowany jako „rozdz. 6” przy nadzorcy, a powinien być rozdz. 5** |
+| 6 | Container Images (65–81) | system plików i konfiguracja obrazu, warstwy, identyfikacja obrazów | 2.1 (obraz, digest) |
+| 7 | Software Vulnerabilities in Images (83–) | podatności, skanowanie, regularne skanowanie | 2.2, 3.5 |
+| 8 | Strengthening Container Isolation (95–104) | seccomp (s. 95), AppArmor, SELinux, gVisor, Kata, Firecracker | metody utwardzania warstwy uruchomieniowej (rozdz. 2) |
+| 9 | Breaking Container Isolation (105–116) | kontenery domyślnie jako root (s. 105), zmiana UID (s. 106), kontenery bez roota (s. 109), `--privileged` i uprawnienia jądra (s. 111), montowanie wrażliwych katalogów (s. 113), gniazdo Dockera (s. 114) | profile P1 i PX; antywzorce |
 
 ---
 

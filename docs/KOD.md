@@ -1,4 +1,4 @@
-# Dokumentacja kodu (Kroki 1–6)
+# Dokumentacja kodu (Kroki 1–6 i badanie konfiguracji uruchomieniowej)
 
 Dokument opisuje **istniejący kod** w `src/` — co robi każdy krok, w jakiej kolejności, jakie
 pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia metodologiczne
@@ -8,6 +8,10 @@ pliki czyta i zapisuje oraz dlaczego działa tak, a nie inaczej. Uzasadnienia me
 Krok 5 (matryca): `candidates`, `select`, `layers`. Krok 6 (skaner): `Scan.py` —
 `freeze-db`, `split`, `run`, `merge`. Liczby matrycy z przebiegu **06–07.10.2026** są w §10;
 uzasadnienia metodologiczne — w [`PLAN.md`](PLAN.md).
+
+Badanie konfiguracji uruchomieniowej (**17–18.11.2026**, po uwagach promotora): `Runtime.py`
+i `src/runtime/` — `build`, `run`, `scan`, `summary`. Opis kodu i plików wynikowych w §15,
+wyniki w [`WYNIKI.md`](WYNIKI.md) §11. Badanie nie zmienia kampanii ani jej plików.
 
 ## Spis treści
 
@@ -25,6 +29,7 @@ uzasadnienia metodologiczne — w [`PLAN.md`](PLAN.md).
 12. [Cache i wznawianie](#12-cache-i-wznawianie)
 13. [Zachowania brzegowe i ograniczenia](#13-zachowania-brzegowe-i-ograniczenia)
 14. [Krok 6 — `Scan.py`: skaner Trivy](#14-krok-6--scanpy-skaner-trivy)
+15. [Badanie konfiguracji uruchomieniowej: `Runtime.py` i `src/runtime/`](#15-badanie-konfiguracji-uruchomieniowej-runtimepy-i-srcruntime)
 
 ---
 
@@ -697,6 +702,9 @@ w grupach. Zapasu 5% z `select` nie ma — N może lekko spaść, bez automatycz
 Wszystkie wyniki to **JSONL**: jeden obiekt JSON na linię, UTF-8, bez znaków ucieczki dla
 polskich liter (`ensure_ascii=False`). Czyta się je strumieniowo i dopisuje linia po linii.
 
+Ta sekcja obejmuje Kroki 1–5. Wiersz `scans.jsonl` (Krok 6) opisuje §14, a pliki badania
+konfiguracji uruchomieniowej (`runtime_*`) — §15.
+
 ### `results/catalog.jsonl` (Krok 1)
 
 | Pole | Opis |
@@ -894,3 +902,96 @@ Pola z matrycy (`logical_ref`, `family`, `variant`, `group_id`, `paired`, `strat
 `cve_total`, `cve_critical|high|medium|low|unknown`, `cve_with_fix`, `pkg_count`,
 `has_shell`, `has_busybox`, `has_apt`, `has_apk`, `part_id`, `scan_ok`, `scanned_at`.
 Pełne raporty CVE zostają w `reports/w{i}/` (gzip).
+
+## 15. Badanie konfiguracji uruchomieniowej: `Runtime.py` i `src/runtime/`
+
+Dodane 17.11.2026 po uwagach promotora (plan w `POPRAWKI.md`, wyniki w `WYNIKI.md` §11), rozszerzone 18.11.2026 o profile z pojedynczymi ustawieniami. Nie zmienia kampanii ani jej plików. W pracy: podrozdziały 3.6 (metodyka), 4.5 (implementacja) i 5.5 (wyniki). Do 19.11.2026 nazywane „badaniem uzupełniającym”; ta nazwa zostaje w etykietach LaTeX (`sec:badanie-uzupelniajace` i in.), w nagłówku `WYNIKI.md` §11 i w komentarzach kodu.
+
+| Plik | Rola |
+| --- | --- |
+| `src/runtime/app.py` | aplikacja-sonda, tylko biblioteka standardowa; `GET /` zwraca `ok`, `GET /probe` zwraca JSON: UID, `CapEff`/`CapBnd`, `NoNewPrivs`, `Seccomp` i liczba filtrów, zapis do `/` i `/usr`, powłoki, menedżery pakietów, `curl`/`wget`, kompilatory, pliki setuid, gniazdo surowe, `chown`, `/etc/shadow`, `pids.max`, `memory.max` |
+| `src/runtime/Dockerfile` | `ARG BASE` (adres z digestem) i `COPY app.py`; `PYTHONDONTWRITEBYTECODE=1`, wektorowy `ENTRYPOINT` |
+| `src/Runtime.py` | sterowanie: `build`, `run`, `scan`, `summary` |
+
+Subkomendy (z katalogu projektu, przy uruchomionym Docker Desktop):
+
+```bash
+python src/Runtime.py build     # cia-probe-{standard,slim,alpine,distroless} na digestach z scans.jsonl
+python src/Runtime.py run       # 4 x 10 profili x 3 powtórzenia -> results/runtime_probe.jsonl
+python src/Runtime.py scan      # docker save -> tar -> Trivy w cia-scanner (zamrożona baza) -> results/runtime_scan.jsonl
+python src/Runtime.py summary   # results/runtime_summary.json + figures/6_7_runtime_matrix.{pgf,png}
+```
+
+Szczegóły:
+- `run` uruchamia kontenery po kolei pod nazwą `cia-probe-run` na porcie `127.0.0.1:18080`. Czeka do 20 s na odpowiedź `ok` i zapisuje wynik sondy. Brak odpowiedzi daje `functional: false` z logiem kontenera.
+- `scan` kopiuje `trivy_cache/frozen` do `trivy_cache/runtime` i skanuje obraz z pliku tar (`--input`), bez gniazda Dockera w kontenerze skanera. Metryki liczy `Scan.parse_metrics`, tak jak w kampanii. Pliki tar są usuwane po skanie.
+- Profile: P0–P3 i PX (narastająco) oraz SC, SN, SR, SL, SU (pojedyncze ustawienia na tle P0, dodane 18.11.2026; `WYNIKI.md` §11.6). Wykres obejmuje tylko profile narastające.
+- `summary` liczy 12 wskaźników z `WYNIKI.md` §11.3, zapisuje też `results/runtime_single_effects.json` (zmiany wskaźników względem P0), sprawdza zgodność trzech powtórzeń i rysuje wykres (styl i zapis PGF z `Analyze.py`). Wskaźnik seccomp jest względny: oznacza mniej filtrów niż w P0 tego samego obrazu, bo w Docker Desktop silnik sam działa pod jednym filtrem.
+- Kolejność w `run`: pętla zewnętrzna po powtórzeniach (1–3), wewnątrz po obrazach i profilach. Powtórzenia jednej konfiguracji nie idą więc bezpośrednio po sobie.
+- `run` i `scan` usuwają swój plik wynikowy przed zapisem. Ponowne uruchomienie nadpisuje poprzedni przebieg, więc archiwum trzeba odłożyć ręcznie (tak powstały pliki z datą 17.11, niżej).
+
+### Pliki wynikowe
+
+Wszystkie w `results/`, poza gitem, jak pliki kampanii. **Źródłem liczb w pracy jest przebieg z 18.11.2026** (`runtime_probe.jsonl`, `runtime_summary.json`, `runtime_single_effects.json`) oraz skan kontrolny z 17.11.2026 (`runtime_scan.jsonl`).
+
+| Plik | Zapisuje | Zawartość |
+| --- | --- | --- |
+| `runtime_probe.jsonl` | `run` | jeden wiersz na uruchomienie: 4 obrazy × 10 profili × 3 powtórzenia = 120 wierszy (18.11.2026, 17:08–17:11 UTC) |
+| `runtime_scan.jsonl` | `scan` | jeden wiersz na obraz z sondą (4 wiersze, 17.11.2026) |
+| `runtime_reports/{klasa}.json` | `scan` | pełne raporty Trivy obrazów z sondą (nieskompresowane; `standard` ok. 12 MB) |
+| `runtime_images/` | `scan` | pliki tar z `docker save`, usuwane po skanie (katalog zostaje pusty) |
+| `runtime_summary.json` | `summary` | lista 40 konfiguracji (obraz × profil) z wskaźnikami |
+| `runtime_single_effects.json` | `summary` | lista 24 porównań: profile P1, SC, SN, SR, SL, SU × 4 obrazy, każde względem P0 |
+| `runtime_probe_2026-11-17.jsonl` | archiwum | pierwszy przebieg: 4 obrazy × 5 profili (P0–P3, PX) × 3 = 60 wierszy (17.11.2026) |
+| `runtime_summary_2026-11-17.json` | archiwum | zestawienie pierwszego przebiegu (20 konfiguracji). Wyniki P0–PX są identyczne z przebiegiem z 18.11 (`WYNIKI.md` §11.6) |
+
+Wykres: `figures/6_7_runtime_matrix.{png,pgf}` oraz osadzone w PGF obrazy `6_7_runtime_matrix-img0.png` i `-img1.png` (tylko profile narastające P0–PX).
+
+**Wiersz `runtime_probe.jsonl`**
+
+| Pole | Opis |
+| --- | --- |
+| `variant` | klasa obrazu: `standard`, `slim`, `alpine`, `distroless` |
+| `profile` | P0–P3, PX, SC, SN, SR, SL, SU (`PROFILES` w `Runtime.py`) |
+| `flags` | opcje `docker run` profilu jako tekst |
+| `image`, `image_id` | nazwa lokalnego obrazu z sondą (`cia-probe-{klasa}`) i jego identyfikator `sha256:…` |
+| `repeat` | numer powtórzenia, 1–3 |
+| `docker_engine` | wersja silnika Dockera (28.5.1) |
+| `started_at` | czas startu kontenera, UTC |
+| `run_exit` | kod wyjścia `docker run -d` |
+| `functional` | `true`, gdy `GET /` zwróciło `ok` w czasie `--wait` (domyślnie 20 s) |
+| `error` | pusty napis albo stderr `docker run` / stan i log kontenera (do 500 znaków) |
+| `probe` | wynik `GET /probe` (pola niżej) |
+
+Pola `probe` (z `src/runtime/app.py`):
+
+| Pole | Opis |
+| --- | --- |
+| `uid`, `gid` | identyfikatory procesu aplikacji |
+| `cap_eff`, `cap_eff_count`, `cap_bnd_count` | maska `CapEff` (hex) z `/proc/self/status` i liczba bitów w `CapEff` i `CapBnd` |
+| `no_new_privs` | `"0"` / `"1"` z `/proc/self/status` |
+| `seccomp`, `seccomp_filters` | tryb seccomp (`"2"` = filtr) i liczba filtrów |
+| `write_root`, `write_usr` | czy udał się zapis pliku testowego w `/` i `/usr` |
+| `shells`, `pkg_managers`, `downloaders`, `compilers` | ścieżki znalezionych programów w katalogach `BIN_DIRS` (każdy katalog liczony raz po `realpath`) |
+| `setuid_files` | pliki z bitem setuid w katalogach z programami (bez schodzenia w podkatalogi) |
+| `raw_socket` | czy udało się otworzyć gniazdo surowe ICMP (`CAP_NET_RAW`) |
+| `chown` | czy udała się zmiana właściciela pliku tymczasowego na 12345 (`CAP_CHOWN`); `null` = brak miejsca na plik |
+| `read_shadow` | czy udał się odczyt `/etc/shadow`; `null` = pliku nie ma w obrazie |
+| `pids_max`, `memory_max` | zawartość plików grup kontrolnych v2; `"max"` = brak limitu, `null` = brak pliku |
+
+**Wiersz `runtime_scan.jsonl`**: `variant`, `image`, `base_logical_ref` i `base_pull_ref` (obraz bazowy z kampanii, adres z digestem), `campaign_cve_total` i `campaign_pkg_count` (wartości z `scans.jsonl`), `scanned_at` oraz metryki z `Scan.parse_metrics` w tym samym układzie co w `scans.jsonl` (`cve_total`, `cve_critical|high|medium|low|unknown`, `cve_with_fix`, `pkg_count`, `has_shell`, `has_busybox`, `has_apt`, `has_apk`).
+
+**Element `runtime_summary.json`**: `variant`, `profile`, `repeats` (liczba uruchomień), `functional`, `repeats_identical` (czy wszystkie powtórzenia dały ten sam `probe` i `functional`), 12 wskaźników zero-jedynkowych, `attacker_count` (ich suma) oraz `probe` z pierwszego powtórzenia. Wskaźniki (`indicators()` w `Runtime.py`, tab. 3.9 w pracy):
+
+| Klucz | Wartość `true`, gdy |
+| --- | --- |
+| `root` | `uid == 0` |
+| `write_fs` | zapis w `/` lub `/usr` |
+| `shell`, `pkg_manager`, `downloader`, `compiler` | odpowiednia lista w `probe` jest niepusta |
+| `setuid` | są pliki setuid i `no_new_privs == "0"` |
+| `raw_socket` | `raw_socket` |
+| `chown`, `read_shadow` | odpowiednie pole jest `true` (`null` liczy się jak `false`) |
+| `no_limits` | `pids_max` lub `memory_max` to `"max"` albo `null` |
+| `no_seccomp` | `seccomp_filters` mniejsze niż w P0 tego samego obrazu |
+
+**Element `runtime_single_effects.json`**: `profile`, `variant`, `flags`, `functional`, `p0_count` i `count` (liczba możliwości napastnika w P0 i w danym profilu) oraz `removed` / `added` (wskaźniki, które profil wyłącza lub włącza względem P0).

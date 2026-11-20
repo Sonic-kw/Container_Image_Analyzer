@@ -1763,3 +1763,22 @@ for t in latest nonroot debug debug-nonroot; do
   curl -s -H "$A" "https://gcr.io/v2/distroless/python3-debian12/manifests/$t"
 done
 ```
+
+## Badanie uzupełniające: konfiguracja uruchomieniowa (17.11.2026)
+
+**Powód.** Promotor zauważył, że tytuł zapowiada utwardzanie „środowisk kontenerowych”, a badanie dotyczy tylko wyboru obrazu bazowego. Tytułu nie można zmienić, bo jest zatwierdzony przez komisję, więc praca i badanie są uzupełniane. Pełny plan poprawek jest w `POPRAWKI.md`.
+
+**Decyzje.**
+1. Kampania 9 755 obrazów zostaje bez zmian. Dochodzi jedno małe badanie, które mieści się w zadaniu 6 APD („wpływ na funkcjonalność runtime”) i w zadaniu 7 (bilans bezpieczeństwa i użyteczności).
+2. Czynnikiem jest klasa obrazu, a profil uruchomienia jest warunkiem. Wybrano grupę `python:3.13` (tę samą co w `tab:grupa`), bo ma wszystkie cztery klasy, a aplikacja z biblioteki standardowej działa także na distroless.
+3. Profile odpowiadają typowym zaleceniom utwardzania konfiguracji: użytkownik nieuprzywilejowany, odebranie uprawnień jądra, `no-new-privileges`, system plików tylko do odczytu i limity. `--privileged` jest antywzorcem, użytym jako punkt odniesienia.
+4. Sonda symuluje kod napastnika w procesie aplikacji (zdalne wykonanie kodu). Niczego nie atakuje, tylko sprawdza dostępność uprawnień i narzędzi.
+5. Użyto tego samego skanera i tej samej zamrożonej bazy co w kampanii. Skan potwierdza, że warstwa aplikacji nie zmienia liczby CVE.
+
+**Odrzucone.**
+- Kubernetes (np. `kind` z Pod Security Standards) i pomiar hosta: za duży koszt czasowy. Obie warstwy są opisane jakościowo w rozdz. 2.
+- Testy statystyczne: wynik jest deterministyczny (3 identyczne powtórzenia), a próba to jedna grupa obrazów.
+
+Implementacja: `KOD.md` §15. Wyniki: `WYNIKI.md` §11.
+
+**Rozszerzenie 18.11.2026 (decyzja autora).** Profile P1–P3 kumulują ustawienia, więc porównanie metod konfiguracji było zbiorcze. Dodano profile z pojedynczym ustawieniem na tle P0 (SC, SN, SR, SL, SU), żeby porównać metody osobno. Uruchomiono ponownie wszystkie 10 profili (120 uruchomień). Wyniki P0–PX się nie zmieniły. Szczegóły: `WYNIKI.md` §11.6.
